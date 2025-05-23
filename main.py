@@ -14,6 +14,7 @@ from metrics.drawdown import (
     calculate_sharpe_ratio,
     calculate_sortino_ratio,
 )
+from metrics.sharpe_reliability import calculate_sharpe_reliability
 
 # Page config
 st.set_page_config(page_title="HyperLiquid Vault Analyser", page_icon="📊", layout="wide")
@@ -177,9 +178,9 @@ if not cache_used:
     # Get vaults data (will use cache if valid)
     vaults = fetch_vaults_data()
 
-    # Limit to the first 50 vaults if needed
+    # Limit to the first 3 vaults if needed
     if limit_vault:
-        vaults = vaults[:50]
+        vaults = vaults[:3]
 
     # Process vault details from cache
     progress_bar = st.progress(0)
@@ -246,6 +247,9 @@ if not cache_used:
 
                     rebuilded_pnl.append(balance)
 
+                # Calculate Sharpe reliability metrics
+                reliability_metrics = calculate_sharpe_reliability(rebuilded_pnl, vault_name=vault["Name"])
+                
                 metrics = {
                     "Max DD %": calculate_max_drawdown_on_accountValue(rebuilded_pnl),
                     "Rekt": nb_rekt,
@@ -254,6 +258,10 @@ if not cache_used:
                     "Sortino Ratio": calculate_sortino_ratio(rebuilded_pnl),
                     "Av. Daily Gain %": calculate_average_daily_gain(rebuilded_pnl, vault["Days Since"]),
                     "Gain %": calculate_total_gain_percentage(rebuilded_pnl),
+                    "Sharpe Reliability": reliability_metrics["Sharpe Reliability"],
+                    "JKM Test P-value": reliability_metrics["JKM Test P-value"],
+                    "Lo Test P-value": reliability_metrics["Lo Test P-value"],
+                    "Fisher Score": reliability_metrics["Fisher Score"],
                 }
                 # Unpacks the metrics dictionary
                 indicator_row = {"Name": vault["Name"], **metrics}
@@ -300,6 +308,8 @@ sliders = [
     {"label": "Min TVL accepted", "column": "Total Value Locked", "max": False, "default": 0, "step": 1},
     {"label": "Min APR accepted", "column": "APR %", "max": False, "default": 0, "step": 1},
     {"label": "Min Followers", "column": "Act. Followers", "max": False, "default": 0, "step": 1},
+    {"label": "Max Sharpe Reliability", "column": "Sharpe Reliability", "max": True, "default": 0.05, "step": 0.01},
+    {"label": "Min Fisher Score", "column": "Fisher Score", "max": False, "default": 0.0, "step": 0.01},
 ]
 
 for i in range(0, len(sliders), 3):

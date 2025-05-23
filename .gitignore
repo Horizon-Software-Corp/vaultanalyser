@@ -2,3 +2,4 @@
 hyperliquid/__pycache__/
 metrics/__pycache__/
 venv
+vault_details_cache.json
