@@ -107,7 +107,86 @@ def minp_fisher_score(df: pd.DataFrame,
     return global_p
 
 
-def calculate_sharpe_reliability(rebuilded_pnl, T=15, SR0=0.5, vault_name="Unknown"):
+def extract_window_debug_data(test_results, rebuilded_pnl, T):
+    """
+    Extract window-by-window debug data for analysis.
+    
+    :param test_results: DataFrame from rolling_sharpe_tests_indep
+    :param rebuilded_pnl: Original PnL data
+    :param T: Window size
+    :return: List of window data dictionaries
+    """
+    windows = []
+    debug_info = {
+        "total_test_results": len(test_results),
+        "p_lo_bonf_stats": {},
+        "p_jkm_bonf_stats": {}
+    }
+    
+    # Debug: Check p_lo_bonf values
+    p_lo_series = test_results['p_lo_bonf']
+    debug_info["p_lo_bonf_stats"] = {
+        "total_values": int(len(p_lo_series)),
+        "nan_count": int(p_lo_series.isna().sum()),
+        "valid_count": int(p_lo_series.notna().sum()),
+        "min_value": float(p_lo_series.min()) if p_lo_series.notna().any() else None,
+        "max_value": float(p_lo_series.max()) if p_lo_series.notna().any() else None
+    }
+    
+    # Debug: Check p_jkm_bonf values as fallback
+    p_jkm_series = test_results['p_jkm_bonf']
+    debug_info["p_jkm_bonf_stats"] = {
+        "total_values": int(len(p_jkm_series)),
+        "nan_count": int(p_jkm_series.isna().sum()),
+        "valid_count": int(p_jkm_series.notna().sum()),
+        "min_value": float(p_jkm_series.min()) if p_jkm_series.notna().any() else None,
+        "max_value": float(p_jkm_series.max()) if p_jkm_series.notna().any() else None
+    }
+    
+    # Try p_lo first, fallback to p_jkm if p_lo is all NaN
+    if p_lo_series.notna().any():
+        p_series = p_lo_series.dropna()
+        p_type = "p_lo_bonf"
+    elif p_jkm_series.notna().any():
+        p_series = p_jkm_series.dropna()
+        p_type = "p_jkm_bonf"
+    else:
+        # Return debug info even if no valid p-values
+        return {"windows": [], "debug_info": debug_info}
+    
+    for i, (idx, p_val) in enumerate(p_series.items()):
+        # Calculate window boundaries
+        # idx is the end of the rolling window in returns array
+        # We need to map back to rebuilded_pnl indices
+        window_end_idx = idx + 1  # +1 because returns array is 1 shorter than pnl
+        window_start_idx = window_end_idx - T + 1
+        
+        # Ensure indices are within bounds
+        if window_start_idx >= 0 and window_end_idx < len(rebuilded_pnl):
+            start_value = rebuilded_pnl[window_start_idx]
+            end_value = rebuilded_pnl[window_end_idx]
+            window_pnl = end_value - start_value
+            
+            # Calculate -log(p_val)
+            neg_log_p = -np.log(max(p_val, 1e-12))  # Avoid log(0)
+            
+            window_data = {
+                "window_id": i,
+                "start_idx": int(window_start_idx),
+                "end_idx": int(window_end_idx),
+                "neg_log_p": round(float(neg_log_p), 6),
+                "window_pnl": round(float(window_pnl), 2),
+                "start_value": round(float(start_value), 2),
+                "end_value": round(float(end_value), 2),
+                "p_original": round(float(p_val), 8),
+                "p_type": p_type
+            }
+            windows.append(window_data)
+    
+    return {"windows": windows, "debug_info": debug_info}
+
+
+def calculate_sharpe_reliability(rebuilded_pnl, T=15, SR0=0.5, vault_name="Unknown", debug_mode=False):
     """
     Calculate Sharpe ratio reliability metrics from rebuilded PnL data.
     
@@ -115,7 +194,8 @@ def calculate_sharpe_reliability(rebuilded_pnl, T=15, SR0=0.5, vault_name="Unkno
     :param T: Window size for rolling tests (default: 15).
     :param SR0: Null hypothesis Sharpe ratio (default: 0.5).
     :param vault_name: Name of vault for debugging (default: "Unknown").
-    :return: Dictionary with reliability metrics.
+    :param debug_mode: If True, return detailed window analysis (default: False).
+    :return: Dictionary with reliability metrics and optionally debug data.
     """
     if len(rebuilded_pnl) < T + 1:
         return {
@@ -175,12 +255,19 @@ def calculate_sharpe_reliability(rebuilded_pnl, T=15, SR0=0.5, vault_name="Unkno
         # Use the more conservative (higher) p-value as the reliability score
         reliability_score = max(fisher_jkm, fisher_lo)
         
-        return {
+        result = {
             "Sharpe Reliability": round(reliability_score, 4),
             "JKM Test P-value": round(avg_jkm_p, 4),
             "Lo Test P-value": round(avg_lo_p, 4),
             "Fisher Score": round(min(fisher_jkm, fisher_lo), 4)
         }
+        
+        # Add debug information if requested
+        if debug_mode:
+            debug_data = extract_window_debug_data(test_results, rebuilded_pnl, T)
+            result["debug_windows"] = debug_data
+        
+        return result
         
     except Exception as e:
         # Return default values if calculation fails

@@ -161,7 +161,7 @@ def calculate_total_gain_percentage(rebuilded_pnl):
     return total_gain_pct
 
 
-limit_vault = False
+limit_vault = True
 
 
 DATAFRAME_CACHE_FILE = "./cache/dataframe.pkl"
@@ -188,6 +188,7 @@ if not cache_used:
     status_text.text("Processing vault details...")
     total_steps = len(vaults)
     indicators = []
+    debug_data = {}  # Store debug data for all vaults
     progress_i = 1
 
     for vault in vaults:
@@ -248,7 +249,25 @@ if not cache_used:
                     rebuilded_pnl.append(balance)
 
                 # Calculate Sharpe reliability metrics
-                reliability_metrics = calculate_sharpe_reliability(rebuilded_pnl, vault_name=vault["Name"])
+                reliability_metrics = calculate_sharpe_reliability(rebuilded_pnl, vault_name=vault["Name"], debug_mode=True)
+                
+                # Store debug data if available
+                if "debug_windows" in reliability_metrics:
+                    debug_windows_data = reliability_metrics["debug_windows"]
+                    debug_data[vault["Name"]] = {
+                        "windows": debug_windows_data.get("windows", []),
+                        "debug_info": debug_windows_data.get("debug_info", {}),
+                        "summary": {
+                            "total_windows": len(debug_windows_data.get("windows", [])),
+                            "vault_address": vault["Vault"],
+                            "leader": vault["Leader"],
+                            "total_pnl_data_points": len(rebuilded_pnl),
+                            "sharpe_reliability": reliability_metrics["Sharpe Reliability"],
+                            "jkm_test_p_value": reliability_metrics["JKM Test P-value"],
+                            "lo_test_p_value": reliability_metrics["Lo Test P-value"],
+                            "fisher_score": reliability_metrics["Fisher Score"]
+                        }
+                    }
                 
                 metrics = {
                     "Max DD %": calculate_max_drawdown_on_accountValue(rebuilded_pnl),
@@ -279,6 +298,24 @@ if not cache_used:
     final_df = vaults_df.merge(indicators_df, on="Name", how="left")
 
     final_df.to_pickle(DATAFRAME_CACHE_FILE)
+    
+    # Save debug data to JSON file
+    if debug_data:
+        debug_file_path = "./cache/debug_windows.json"
+        debug_output = {
+            "metadata": {
+                "generated_at": datetime.now().isoformat(),
+                "total_vaults": len(debug_data),
+                "window_size": 15,
+                "description": "Window-by-window analysis of Sharpe ratio reliability tests"
+            },
+            "vaults": debug_data
+        }
+        
+        with open(debug_file_path, "w") as f:
+            json.dump(debug_output, f, indent=2)
+        
+        st.toast(f"Debug data saved to {debug_file_path}", icon="📊")
 
 
 # Filters
