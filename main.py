@@ -21,6 +21,7 @@ st.set_page_config(page_title="HyperLiquid Vault Analyser", page_icon="📊", la
 
 # Title and description
 st.title("📊 HyperLiquid Vault Analyser")
+st.caption("🏦 Vault Analysis Mode - For user analysis, run: streamlit run user_analysis.py")
 
 # Update time display
 try:
