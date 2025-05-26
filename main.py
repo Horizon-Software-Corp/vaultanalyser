@@ -247,11 +247,13 @@ if not cache_used:
 
                     rebuilded_pnl.append(balance)
 
+                if len(rebuilded_pnl) <= 3:
+                    continue
                 # Calculate Sharpe reliability metrics
-                reliability_metrics = calculate_sharpe_reliability(rebuilded_pnl, vault_name=vault["Name"], debug_mode=False)
+                reliability_metrics = calculate_sharpe_reliability(rebuilded_pnl)
 
                 reliability_metrics_keys = reliability_metrics.keys()
-                
+
                 metrics = {
                     "Max DD %": calculate_max_drawdown_on_accountValue(rebuilded_pnl),
                     "Rekt": nb_rekt,
@@ -300,16 +302,64 @@ if name_filter.strip():  # Check that the filter is not empty
 
 # Organize sliders into rows of 3
 sliders = [
-    {"label": "Min Sharpe Ratio", "column": "Sharpe Ratio", "max": False, "default": 0.4, "step": 0.05},
-    {"label": "Min Sortino Ratio", "column": "Sortino Ratio", "max": False, "default": 0.5, "step": 0.05},
-    {"label": "Max Rekt accepted", "column": "Rekt", "max": True, "default": 0, "step": 1},
-    {"label": "Max DD % accepted", "column": "Max DD %", "max": True, "default": 15, "step": 1},
-    {"label": "Min Days Since accepted", "column": "Days Since", "max": False, "default": 100, "step": 1},
-    {"label": "Min TVL accepted", "column": "Total Value Locked", "max": False, "default": 0, "step": 1},
-    {"label": "Min APR accepted", "column": "APR %", "max": False, "default": 0, "step": 1},
-    {"label": "Min Followers", "column": "Act. Followers", "max": False, "default": 0, "step": 1},
-    {"label": "Min Sharpe Reliability", "column": "Sharpe Reliability", "min": True, "default": 0.05, "step": 0.01},
-    {"label": "Min Fisher Score", "column": "Fisher Score", "max": False, "default": 0.05, "step": 0.01},
+    {
+        "label": "Min Sharpe Ratio",
+        "column": "Sharpe Ratio",
+        "max": False,
+        "default": 0.4,
+        "step": 0.05,
+    },
+    {
+        "label": "Min Sortino Ratio",
+        "column": "Sortino Ratio",
+        "max": False,
+        "default": 0.5,
+        "step": 0.05,
+    },
+    {
+        "label": "Max Rekt accepted",
+        "column": "Rekt",
+        "max": True,
+        "default": 0,
+        "step": 1,
+    },
+    {
+        "label": "Max DD % accepted",
+        "column": "Max DD %",
+        "max": True,
+        "default": 15,
+        "step": 1,
+    },
+    {
+        "label": "Min Days Since accepted",
+        "column": "Days Since",
+        "max": False,
+        "default": 100,
+        "step": 1,
+    },
+    {
+        "label": "Min TVL accepted",
+        "column": "Total Value Locked",
+        "max": False,
+        "default": 0,
+        "step": 1,
+    },
+    {
+        "label": "Min APR accepted",
+        "column": "APR %",
+        "max": False,
+        "default": 0,
+        "step": 1,
+    },
+    {
+        "label": "Min Followers",
+        "column": "Act. Followers",
+        "max": False,
+        "default": 0,
+        "step": 1,
+    },
+    # {"label": "Min Sharpe Reliability", "column": "Sharpe Reliability", "min": True, "default": 0.05, "step": 0.01},
+    # {"label": "Min Fisher Score", "column": "Fisher Score", "max": False, "default": 0.05, "step": 0.01},
 ]
 
 for i in range(0, len(sliders), 3):

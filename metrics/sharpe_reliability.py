@@ -131,10 +131,10 @@ def p_sharpe(
         p = _pvalue_psr(ret, SR0, alternative=alternative, LT=LT)
     elif kind is TestKind.HACt:
         if LT is not None:
-            raise ValueError("LT is not used for HAC-t test")
+            return {}
         p = _pvalue_hact(ret, SR0, alternative=alternative, hac_lags=hac_lags)
     else:  # safety
-        raise ValueError("unknown TestKind")
+        return {}
 
     return {key: p}
 
@@ -172,7 +172,7 @@ def block_tests(
     """
     ret = ret[~np.isnan(ret)]
     if len(ret) < 3:
-        raise ValueError("sample too short")
+        return {}
 
     p_blocks: list[float] = []
     for start in range(len(ret) - h, -1, -h):  # newest → oldest
@@ -184,7 +184,7 @@ def block_tests(
         elif kind is TestKind.HACt:
             p_blocks.append(_pvalue_hact(blk, SR0, alternative=alternative))
         else:  # safety
-            raise ValueError("unknown TestKind")
+            return {}
 
     p_arr = np.asarray(p_blocks)
     # block weights (newest block weight = 1)
@@ -217,7 +217,7 @@ def calculate_sharpe_reliability(rebuilded_pnl: List[float], h=30, SR0=0.1, LT=6
         { "p_<kind>_...": value , ... }
     """
     if len(rebuilded_pnl) < 3:
-        raise ValueError("rebuilded_pnl too short")
+        return {}
 
     # ------------------------- returns -------------------------
     pnl = np.asarray(rebuilded_pnl, dtype=float)
