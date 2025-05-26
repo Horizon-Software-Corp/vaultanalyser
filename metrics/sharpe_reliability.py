@@ -1,279 +1,277 @@
 import numpy as np
 import pandas as pd
+from scipy import stats
 from scipy.stats import norm, chi2
+from typing import List, Dict
+
 import math
 
+from enum import StrEnum, auto
+from itertools import chain
 
-def rolling_sharpe_tests_indep(df: pd.DataFrame,
-                               SR0: float = 0.5,
-                               T: int = 30,
-                               alpha: float = 0.05) -> pd.DataFrame:
+
+# ────────────────────────────────────────────────────────────────
+# Enumerations
+# ────────────────────────────────────────────────────────────────
+class Alternative(StrEnum):
+    UP = "up"  # H1: SR > SR0
+    DOWN = "down"  # H1: SR < SR0
+    BOTH = "both"  # H1: SR ≠ SR0
+
+
+class TestKind(StrEnum):
+    PSR = "psr"
+    HACt = "hact"  # Lo (2002) HAC-t
+
+
+# ────────────────────────────────────────────────────────────────
+# helpers
+# ────────────────────────────────────────────────────────────────
+def _clean(ret: np.ndarray) -> np.ndarray:
+    """drop NaN and return copy"""
+    return ret[~np.isnan(ret)].copy()
+
+
+def _weights(n: int, LT: int | None) -> np.ndarray:
+    """exp-decay weights (newest first) normalised to sum 1"""
+    if LT is None or LT <= 0:
+        return np.ones(n) / n
+    ages = np.arange(n)  # age=0 is newest
+    w = np.exp(-ages / LT)
+    return w / w.sum()
+
+
+# ────────────────────────────────────────────────────────────────
+# low-level p-value calculators
+# ────────────────────────────────────────────────────────────────
+def _pvalue_psr(
+    ret: np.ndarray,
+    SR0: float,
+    *,
+    alternative: Alternative,
+    LT: int | None,
+) -> float:
+    """Exponentially weighted Probabilistic Sharpe Ratio p-value."""
+    ret = _clean(ret)[::-1]  # newest first
+    n = len(ret)
+    if n < 3:
+        return np.nan
+
+    w = _weights(n, LT)
+    mu = np.dot(w, ret)
+    var = np.dot(w, (ret - mu) ** 2)
+    sig = np.sqrt(var)
+    S = mu / sig
+
+    g = np.dot(w, (ret - mu) ** 3) / sig**3
+    k_ex = np.dot(w, (ret - mu) ** 4) / sig**4 - 3.0
+    N_eff = 1.0 / np.sum(w**2)
+
+    denom = np.sqrt((1 - g * S + 0.25 * k_ex * S**2) / (N_eff - 1))
+    z = (S - SR0) / denom
+
+    if alternative is Alternative.UP:
+        return 1.0 - stats.norm.cdf(z)
+    if alternative is Alternative.DOWN:
+        return stats.norm.cdf(z)
+    return 2.0 * (1.0 - stats.norm.cdf(abs(z)))
+
+
+def _pvalue_hact(
+    ret: np.ndarray,
+    SR0: float,
+    *,
+    alternative: Alternative,
+    hac_lags: int | None = None,
+) -> float:
+    """Lo (2002) HAC-t p-value (equal weights)."""
+    ret = _clean(ret)
+    n = len(ret)
+    if n < 3:
+        return np.nan
+
+    mu, sig = ret.mean(), ret.std(ddof=1)
+    S = mu / sig
+    if hac_lags is None:
+        hac_lags = int(np.floor(n ** (1 / 3)))
+
+    rc = ret - mu
+    gamma0 = (rc @ rc) / n
+    rho = [(rc[:-l] @ rc[l:]) / ((n - l) * gamma0) for l in range(1, hac_lags + 1)]
+    w = [1 - l / (hac_lags + 1) for l in range(1, hac_lags + 1)]
+    f_L = 1 + 2 * np.sum(np.array(w) * np.array(rho))
+
+    t = (S - SR0) * np.sqrt(n) / np.sqrt(f_L)
+    if alternative is Alternative.UP:
+        return 1.0 - stats.t.cdf(t, df=n - 1)
+    if alternative is Alternative.DOWN:
+        return stats.t.cdf(t, df=n - 1)
+    return 2.0 * (1.0 - stats.t.cdf(abs(t), df=n - 1))
+
+
+# ────────────────────────────────────────────────────────────────
+# Public API
+# ────────────────────────────────────────────────────────────────
+def p_sharpe(
+    ret: np.ndarray,
+    SR0: float = 0.1,
+    *,
+    kind: TestKind = TestKind.PSR,
+    alternative: Alternative = Alternative.UP,
+    LT: int | None = None,
+    hac_lags: int | None = None,
+) -> dict[str, float]:
     """
-    Rolling Jobson-Korkie/Memmel Z-test & Lo (HAC) t-test
-    with Bonferroni correction based on 'independent windows × Meff'.
-
-    Bonferroni factor = ceil(valid_days / T) * Meff
-        • ceil(valid_days / T) … 窓の"ほぼ独立"個数
-        • Meff … 同じ窓内での JKM と Lo の実効独立度
-                 （典型的に 1.2–1.6 程度で安定）
+    Return example:
+        {"p_psr_up_LT=60": 0.023}
     """
-    r = df['returns']
-    win = r.rolling(T)
+    key = f"p_{kind}_{alternative}_LT={LT}"
 
-    # -- ローリング平均・標準偏差・Sharpe
-    mean_r = win.mean()
-    std_r  = win.std(ddof=1)
-    sharpe = mean_r / std_r
+    if kind is TestKind.PSR:
+        p = _pvalue_psr(ret, SR0, alternative=alternative, LT=LT)
+    elif kind is TestKind.HACt:
+        if LT is not None:
+            raise ValueError("LT is not used for HAC-t test")
+        p = _pvalue_hact(ret, SR0, alternative=alternative, hac_lags=hac_lags)
+    else:  # safety
+        raise ValueError("unknown TestKind")
 
-    # -- Jobson–Korkie / Memmel Z
-    var_sr = (1 + 0.5 * SR0**2) / T
-    Z_jkm = (sharpe - SR0) / np.sqrt(var_sr)
-    p_jkm = 2 * (1 - norm.cdf(np.abs(Z_jkm)))
-
-    # -- Lo (HAC) t
-    q = int(np.floor(T ** 0.25))
-    demean = r - mean_r
-    gamma0 = win.var(ddof=0)
-    gamma_sum = 0.0
-    for k in range(1, q + 1):
-        w = 1 - k / (q + 1)
-        cov_k = (demean * demean.shift(k)).rolling(T).mean()
-        gamma_sum += w * cov_k
-    var_mean_hac = (gamma0 + 2 * gamma_sum) / T
-    se_mean_hac  = np.sqrt(var_mean_hac)
-    t_lo = (mean_r - SR0 * std_r) / se_mean_hac
-    p_lo = 2 * (1 - norm.cdf(np.abs(t_lo)))
-
-    # -- Bonferroni factor
-    valid_days  = sharpe.notna().sum()
-    Meff = 1.3          # 実効独立度（典型的に 1.2〜1.6 に安定）
-    bonf_factor = math.ceil(valid_days / T) * Meff
-
-    p_jkm_bonf = (p_jkm * bonf_factor).clip(0, 1.0)
-    p_lo_bonf  = (p_lo  * bonf_factor).clip(0, 1.0)
-
-    rej_jkm = f"reject_jkm_{alpha}"
-    rej_lo  = f"reject_lo_{alpha}"
-
-    out = df.copy()
-    out['Z_jkm']       = Z_jkm
-    out['p_jkm']       = p_jkm
-    out['p_jkm_bonf']  = p_jkm_bonf
-    out[rej_jkm]       = p_jkm < alpha
-    out[f'{rej_jkm}_bonf'] = p_jkm_bonf < alpha
-
-    out['t_lo']        = t_lo
-    out['p_lo']        = p_lo
-    out['p_lo_bonf']   = p_lo_bonf
-    out[rej_lo]        = p_lo < alpha
-    out[f'{rej_lo}_bonf']  = p_lo_bonf < alpha
-
-    return out
+    return {key: p}
 
 
-def minp_fisher_score(df: pd.DataFrame,
-                      p_column: str,
-                      T: int = 30,
-                      eps: float = 1e-12):
+# ────────────────────────────────────────────────────────────────
+# block-wise, exp-weighted Fisher combination
+# ────────────────────────────────────────────────────────────────
+def _weighted_fisher_brown(p: np.ndarray, w: np.ndarray) -> float:
+    """Good/Lancaster–Brown weighted Fisher (Gamma approximation)."""
+    T = -2.0 * np.sum(w * np.log(p))
+    mu = 2.0 * np.sum(w)
+    var = 4.0 * np.sum(w**2)
+    k = mu**2 / var
+    theta = var / mu
+    return stats.gamma.sf(T, k, scale=theta)
+
+
+def block_tests(
+    ret: np.ndarray,
+    SR0: float = 0.1,
+    *,
+    kind: TestKind = TestKind.PSR,
+    h: int = 30,
+    LT: int | None = 60,  # -- sample & block lifetime
+    alternative: Alternative = Alternative.UP,
+) -> dict[str, float]:
     """
-    Hybrid Tippett + Fisher test.
-        1. Split `p_column` into non-overlapping blocks of length T.
-        2. Block statistic = min(p)  (Tippett)
-        3. Global Fisher statistic  S = -2 Σ ln(min_p)
-           Under H0 and independent blocks:  S ~ χ²(2B).
+    1. 末尾から h 日ごとに非重複ブロックを作成（最新 → 過去）
+    2. 各ブロックで `kind` に応じた p 値を計算
+          • PSR  …  サンプルを EWMA( LT ) で重み付け
+          • HAC-t…  等重み（Lo 2002 標準形）
+    3. ブロック p 値を
+          w_i = exp(− age / LT)  （age = i·h 日）で
+       Good/Lancaster–Brown Fisher 合成
+    """
+    ret = ret[~np.isnan(ret)]
+    if len(ret) < 3:
+        raise ValueError("sample too short")
 
+    p_blocks: list[float] = []
+    for start in range(len(ret) - h, -1, -h):  # newest → oldest
+        blk = ret[start : start + h]
+        if len(blk) < 3:
+            break
+        if kind is TestKind.PSR:
+            p_blocks.append(_pvalue_psr(blk, SR0, alternative=alternative, LT=LT))
+        elif kind is TestKind.HACt:
+            p_blocks.append(_pvalue_hact(blk, SR0, alternative=alternative))
+        else:  # safety
+            raise ValueError("unknown TestKind")
+
+    p_arr = np.asarray(p_blocks)
+    # block weights (newest block weight = 1)
+    w_blocks = (
+        np.ones_like(p_arr, dtype=float)
+        if LT is None
+        else np.exp(-np.arange(len(p_arr)) * h / LT)
+    )
+
+    key = f"p_{kind}_h={h}_LT={LT}_{alternative}"
+    return {key: _weighted_fisher_brown(p_arr, w_blocks)}
+
+
+def calculate_sharpe_reliability(rebuilded_pnl: List[float], h=30, SR0=0.1, LT=60):
+    """
+    Compute Sharpe–ratio p-values on (log-)P&L series.
+
+    Parameters
+    ----------
+    rebuilded_pnl : list[float]
+        Equity curve or accumulated P&L (length ≥ 2).
+    h : int
+        Block length for the Fisher aggregation.
+    SR0 : float
+        Sharpe‐ratio benchmark.
+
+    Returns
     -------
-    global_p     : float, Fisher p-value across blocks.
-    fisher_stat  : float, Fisher statistic across blocks.
+    dict
+        { "p_<kind>_...": value , ... }
     """
-    # -------- validation -----------------------------------------------------
-    if not p_column.startswith('p_'):
-        raise ValueError(f"'{p_column}' は p値列に見えません（'p_' で始まる必要あり）。")
-    if p_column not in df.columns:
-        raise ValueError(f"DataFrame に列 '{p_column}' が存在しません。")
+    if len(rebuilded_pnl) < 3:
+        raise ValueError("rebuilded_pnl too short")
 
-    p_series = df[p_column].astype(float)
-    block_id = np.arange(len(p_series)) // T
+    # ------------------------- returns -------------------------
+    pnl = np.asarray(rebuilded_pnl, dtype=float)
+    ret = np.diff(pnl) / pnl[:-1]  # simple daily return
+    # -----------------------------------------------------------
 
-    # -------- Tippett per block ---------------------------------------------
-    min_p = p_series.groupby(block_id).min().clip(eps, None)
-    block_stat = -2 * np.log(min_p)            # Fisher 部分統計
+    # helper to merge dicts
+    def merge(*dicts):
+        return dict(chain.from_iterable(d.items() for d in dicts))
 
-    # -------- Fisher across blocks ------------------------------------------
-    fisher_stat  = block_stat.sum()
-    df_global    = 2 * len(block_stat)         # 自由度 2B
-    global_p     = chi2.sf(fisher_stat, df=df_global)
+    # -------- entire window -----------------------------------
+    p_all_up = merge(
+        p_sharpe(ret, SR0, kind=TestKind.HACt, alternative=Alternative.UP),
+        p_sharpe(ret, SR0, kind=TestKind.PSR, alternative=Alternative.UP, LT=None),
+        p_sharpe(ret, SR0, kind=TestKind.PSR, alternative=Alternative.UP, LT=LT),
+    )
 
-    return global_p
+    p_all_down = merge(
+        p_sharpe(ret, SR0, kind=TestKind.HACt, alternative=Alternative.DOWN),
+        p_sharpe(ret, SR0, kind=TestKind.PSR, alternative=Alternative.DOWN, LT=None),
+        p_sharpe(ret, SR0, kind=TestKind.PSR, alternative=Alternative.DOWN, LT=LT),
+    )
 
+    # -------- block-wise aggregation ---------------------------
+    p_blk_up = merge(
+        block_tests(
+            ret, SR0, kind=TestKind.HACt, h=h, LT=None, alternative=Alternative.UP
+        ),
+        block_tests(
+            ret, SR0, kind=TestKind.PSR, h=h, LT=None, alternative=Alternative.UP
+        ),
+        block_tests(
+            ret, SR0, kind=TestKind.PSR, h=h, LT=60, alternative=Alternative.UP
+        ),
+    )
 
-def extract_window_debug_data(test_results, rebuilded_pnl, T):
-    """
-    Extract window-by-window debug data for analysis.
-    
-    :param test_results: DataFrame from rolling_sharpe_tests_indep
-    :param rebuilded_pnl: Original PnL data
-    :param T: Window size
-    :return: List of window data dictionaries
-    """
-    windows = []
-    debug_info = {
-        "total_test_results": len(test_results),
-        "p_lo_bonf_stats": {},
-        "p_jkm_bonf_stats": {}
-    }
-    
-    # Debug: Check p_lo_bonf values
-    p_lo_series = test_results['p_lo_bonf']
-    debug_info["p_lo_bonf_stats"] = {
-        "total_values": int(len(p_lo_series)),
-        "nan_count": int(p_lo_series.isna().sum()),
-        "valid_count": int(p_lo_series.notna().sum()),
-        "min_value": float(p_lo_series.min()) if p_lo_series.notna().any() else None,
-        "max_value": float(p_lo_series.max()) if p_lo_series.notna().any() else None
-    }
-    
-    # Debug: Check p_jkm_bonf values as fallback
-    p_jkm_series = test_results['p_jkm_bonf']
-    debug_info["p_jkm_bonf_stats"] = {
-        "total_values": int(len(p_jkm_series)),
-        "nan_count": int(p_jkm_series.isna().sum()),
-        "valid_count": int(p_jkm_series.notna().sum()),
-        "min_value": float(p_jkm_series.min()) if p_jkm_series.notna().any() else None,
-        "max_value": float(p_jkm_series.max()) if p_jkm_series.notna().any() else None
-    }
-    
-    # Try p_lo first, fallback to p_jkm if p_lo is all NaN
-    if p_lo_series.notna().any():
-        p_series = p_lo_series.dropna()
-        p_type = "p_lo_bonf"
-    elif p_jkm_series.notna().any():
-        p_series = p_jkm_series.dropna()
-        p_type = "p_jkm_bonf"
-    else:
-        # Return debug info even if no valid p-values
-        return {"windows": [], "debug_info": debug_info}
-    
-    for i, (idx, p_val) in enumerate(p_series.items()):
-        # Calculate window boundaries
-        # idx is the end of the rolling window in returns array
-        # We need to map back to rebuilded_pnl indices
-        window_end_idx = idx + 1  # +1 because returns array is 1 shorter than pnl
-        window_start_idx = window_end_idx - T + 1
-        
-        # Ensure indices are within bounds
-        if window_start_idx >= 0 and window_end_idx < len(rebuilded_pnl):
-            start_value = rebuilded_pnl[window_start_idx]
-            end_value = rebuilded_pnl[window_end_idx]
-            window_pnl = end_value - start_value
-            
-            # Calculate -log(p_val)
-            neg_log_p = -np.log(max(p_val, 1e-12))  # Avoid log(0)
-            
-            window_data = {
-                "window_id": i,
-                "start_idx": int(window_start_idx),
-                "end_idx": int(window_end_idx),
-                "neg_log_p": round(float(neg_log_p), 6),
-                "window_pnl": round(float(window_pnl), 2),
-                "start_value": round(float(start_value), 2),
-                "end_value": round(float(end_value), 2),
-                "p_original": round(float(p_val), 8),
-                "p_type": p_type
-            }
-            windows.append(window_data)
-    
-    return {"windows": windows, "debug_info": debug_info}
+    p_blk_down = merge(
+        block_tests(
+            ret, SR0, kind=TestKind.HACt, h=h, LT=None, alternative=Alternative.DOWN
+        ),
+        block_tests(
+            ret, SR0, kind=TestKind.PSR, h=h, LT=None, alternative=Alternative.DOWN
+        ),
+        block_tests(
+            ret, SR0, kind=TestKind.PSR, h=h, LT=60, alternative=Alternative.DOWN
+        ),
+    )
 
+    # -------- concat & return ---------------------------------
+    return merge(p_all_up, p_all_down, p_blk_up, p_blk_down)
 
-def calculate_sharpe_reliability(rebuilded_pnl, T=15, SR0=0.5, vault_name="Unknown", debug_mode=False):
-    """
-    Calculate Sharpe ratio reliability metrics from rebuilded PnL data.
-    
-    :param rebuilded_pnl: List of cumulative PnL values ($).
-    :param T: Window size for rolling tests (default: 15).
-    :param SR0: Null hypothesis Sharpe ratio (default: 0.5).
-    :param vault_name: Name of vault for debugging (default: "Unknown").
-    :param debug_mode: If True, return detailed window analysis (default: False).
-    :return: Dictionary with reliability metrics and optionally debug data.
-    """
-    if len(rebuilded_pnl) < T + 1:
-        return {
-            "Sharpe Reliability": 1.0,  # High p-value indicates low reliability
-            "JKM Test P-value": 1.0,
-            "Lo Test P-value": 1.0,
-            "Fisher Score": 1.0
-        }
-    
-    try:
-        # Calculate returns from rebuilded PnL
-        returns = [rebuilded_pnl[i] / rebuilded_pnl[i - 1] - 1 
-                  for i in range(1, len(rebuilded_pnl)) 
-                  if rebuilded_pnl[i - 1] != 0]
-        
-        if len(returns) < T:
-            return {
-                "Sharpe Reliability": 1.0,
-                "JKM Test P-value": 1.0,
-                "Lo Test P-value": 1.0,
-                "Fisher Score": 1.0
-            }
-        
-        # Check for NaN or infinite values
-        if np.any(np.isnan(returns)) or np.any(np.isinf(returns)):
-            return {
-                "Sharpe Reliability": 1.0,
-                "JKM Test P-value": 1.0,
-                "Lo Test P-value": 1.0,
-                "Fisher Score": 1.0
-            }
-        
-        # Create DataFrame for analysis
-        df = pd.DataFrame({'returns': returns})
-        
-        # Perform rolling Sharpe tests
-        test_results = rolling_sharpe_tests_indep(df, SR0=SR0, T=T)
-        
-        # Calculate Fisher scores for both tests
-        fisher_jkm = minp_fisher_score(test_results, 'p_jkm_bonf', T=T)
-        fisher_lo = minp_fisher_score(test_results, 'p_lo_bonf', T=T)
-        
-        # Get average p-values for individual tests (handle NaN)
-        avg_jkm_p = test_results['p_jkm_bonf'].mean()
-        avg_lo_p = test_results['p_lo_bonf'].mean()
-        
-        # Handle NaN values
-        if pd.isna(avg_jkm_p):
-            avg_jkm_p = 1.0
-        if pd.isna(avg_lo_p):
-            avg_lo_p = 1.0
-        if pd.isna(fisher_jkm):
-            fisher_jkm = 1.0
-        if pd.isna(fisher_lo):
-            fisher_lo = 1.0
-        
-        # Use the more conservative (higher) p-value as the reliability score
-        reliability_score = max(fisher_jkm, fisher_lo)
-        
-        result = {
-            "Sharpe Reliability": round(reliability_score, 4),
-            "JKM Test P-value": round(avg_jkm_p, 4),
-            "Lo Test P-value": round(avg_lo_p, 4),
-            "Fisher Score": round(min(fisher_jkm, fisher_lo), 4)
-        }
-        
-        # Add debug information if requested
-        if debug_mode:
-            debug_data = extract_window_debug_data(test_results, rebuilded_pnl, T)
-            result["debug_windows"] = debug_data
-        
-        return result
-        
-    except Exception as e:
-        # Return default values if calculation fails
-        return {
-            "Sharpe Reliability": 1.0,
-            "JKM Test P-value": 1.0,
-            "Lo Test P-value": 1.0,
-            "Fisher Score": 1.0
-        }
+    # # Add debug information if requested
+    # if is_debug:
+    #     debug_data = extract_window_debug_data(test_results, rebuilded_pnl, h)
+    #     result["debug_windows"] = debug_data
+
+    # return result
