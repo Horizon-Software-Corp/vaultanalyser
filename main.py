@@ -4,8 +4,9 @@
 import json
 import os
 from datetime import datetime, timedelta
-
+import warnings
 import pandas as pd
+import numpy as np
 import streamlit as st
 
 from hyperliquid.vaults import fetch_vault_details, fetch_vaults_data
@@ -15,6 +16,10 @@ from metrics.drawdown import (
     calculate_sortino_ratio,
 )
 from metrics.sharpe_reliability import calculate_sharpe_reliability
+
+# 浮動小数点エラー（invalid, divide, over, under）も例外化
+# warnings.filterwarnings("error", category=RuntimeWarning)
+# np.seterr(all="raise")
 
 # Page config
 st.set_page_config(page_title="HyperLiquid Vault Analyser", page_icon="📊", layout="wide")
@@ -173,7 +178,7 @@ try:
 except (FileNotFoundError, KeyError, ValueError):
     pass
 
-if not cache_used:
+if not cache_used or True:
 
     # Get vaults data (will use cache if valid)
     vaults = fetch_vaults_data()
@@ -203,66 +208,180 @@ if not cache_used:
 
         if details and "portfolio" in details:
             if details["portfolio"][3][0] == "allTime":
+                # """
+                # 日次だと思ってたが、違う！！！！
+                # 別のデータソースから日次データを取得しなくては・・・
+                # """
                 data_source_pnlHistory = details["portfolio"][3][1].get("pnlHistory", [])
                 data_source_accountValueHistory = details["portfolio"][3][1].get("accountValueHistory", [])
                 rebuilded_pnl = []
+                final_capital_virtuals = []
+                used_capitals = []
+                returns = []
+                bankrupts = []
+                transferIns = []
 
                 balance = start_balance_amount = 1000000
                 nb_rekt = 0
                 last_rekt_idx = -10
 
                 # Recalculate the balance without considering deposit movements
+                is_print_bunkrupt = False
+                is_neglect_bunkrupt = False
+
                 for idx, value in enumerate(data_source_pnlHistory):
                     if idx == 0:
+                        final_capital_virtuals.append(0)  # = final_capital
+                        used_capitals.append(None)  # = initial_capital
+                        returns.append(0)
+                        rebuilded_pnl.append(balance)
+                        bankrupts.append(0)
+                        transferIns.append(0)
                         continue
 
                     # Capital at time T
-                    final_capital = float(data_source_accountValueHistory[idx][1])
-                    # Cumulative PnL at time T
-                    final_cumulated_pnl = float(data_source_pnlHistory[idx][1])
-                    # Cumulative PnL at time T -1
-                    previous_cumulated_pnl = float(data_source_pnlHistory[idx - 1][1]) if idx > 0 else 0
-                    # Non-cumulative PnL at time T
-                    final_pnl = final_cumulated_pnl - previous_cumulated_pnl
-                    # Capital before the gain/loss
-                    initial_capital = final_capital - final_pnl
+                    initial_capital = float(
+                        data_source_accountValueHistory[idx - 1][1]
+                    )  # >= 0
+                    final_capital = float(
+                        data_source_accountValueHistory[idx][1]
+                    )  # >= 0
+                    pnl = float(data_source_pnlHistory[idx][1]) - float(
+                        data_source_pnlHistory[idx - 1][1]
+                    )
+                    transferIn = round(final_capital - initial_capital - pnl, 1)
+                    transferIns.append(transferIn)
+                    used_capital = max(initial_capital, initial_capital + transferIn)
+                    used_capitals.append(used_capital)
+                    final_capital_virtual = initial_capital + pnl
+                    final_capital_virtuals.append(final_capital_virtual)
 
-                    if initial_capital <= 0:
+                    bankrupt = 0
+                    if initial_capital == 0:
+                        pass
+                    elif (
+                        final_capital_virtual <= initial_capital * 0.01
+                        or final_capital_virtual <= initial_capital * 0.1
+                        and final_capital_virtual < 10
+                    ):
+                        # 　厳密には、initial_capitalよりもだいぶ大きい額をtransferInした直後にちょっと損失が出る場合も含まれてしまうが、無視する
+                        is_print_bunkrupt = True
                         if last_rekt_idx + 1 != idx:
-                            rebuilded_pnl = []
-                            balance = start_balance_amount
                             nb_rekt = nb_rekt + 1
+                            balance = start_balance_amount
+                            bankrupt = 1
+                            if is_neglect_bunkrupt:
+                                rebuilded_pnl = [start_balance_amount] * len(balance)
                         last_rekt_idx = idx
-                        continue
+                        # continue
+
                     # Gain/loss ratio
-                    ratio = final_capital / initial_capital
+                    if used_capital == 0:
+                        ret = 0
+                    else:
+                        ret = pnl / used_capital
+                    returns.append(ret)
 
                     # Verify timestamp consistency
-                    if data_source_pnlHistory[idx][0] != data_source_accountValueHistory[idx][0]:
+                    if (
+                        data_source_pnlHistory[idx][0]
+                        != data_source_accountValueHistory[idx][0]
+                    ):
                         print("Just to check, normally not happening")
                         exit()
 
                     # Update the simulated balance
-                    balance = balance * ratio
-
+                    if bankrupt:
+                        pass
+                    else:
+                        balance = round(balance * (1 + ret), 2)
                     rebuilded_pnl.append(balance)
+                    bankrupts.append(bankrupt)
 
-                if len(rebuilded_pnl) <= 3:
+                #
+                # if max(returns) > 1 and pnl > 1000:
+                if is_print_bunkrupt and False:
+                    df = pd.DataFrame(data_source_pnlHistory, columns=["Time", "PnL"])
+                    df2 = pd.DataFrame(
+                        data_source_accountValueHistory,
+                        columns=["Time", "Account Val"],
+                    )
+                    df = pd.merge(df, df2, on="Time", how="left").astype(float)
+                    df = pd.concat(
+                        [
+                            df,
+                            pd.DataFrame(transferIns, columns=["TransfIn"]),
+                            pd.DataFrame(used_capitals, columns=["UsedCapt"]),
+                            pd.DataFrame(returns, columns=["Returns"]),
+                            pd.DataFrame(rebuilded_pnl, columns=["RebuildPnL"]),
+                            pd.DataFrame(bankrupts, columns=["Rekt"]),
+                        ],
+                        axis=1,
+                    )
+                    pd.set_option("display.max_columns", None)  # Show all rows
+                    df = df.drop(axis=1, columns=["Time"])
+                    pd.set_option("display.float_format", "{:.4g}".format)
+                    print(f"Vault {vault['Name']} has beel left bunkrupt:\n{df}")
+
+                ret = np.asarray(returns, dtype=float)
+                ret = ret[np.isfinite(ret)]
+                df = pd.DataFrame(data_source_pnlHistory, columns=["Time", "PnL"])
+                df["Time"] = pd.to_datetime(
+                    df["Time"], unit="ms", origin="unix", utc=True
+                )
+                # print(f"Days:{len(ret)}", df)
+                # raise Exception("Debugging vaults")
+
+                # metrics = {
+                #     "Max DD %": calculate_max_drawdown_on_accountValue(rebuilded_pnl),
+                #     "Rekt": nb_rekt,
+                #     "Act. Followers": nb_followers,
+                #     "Sharpe Ratio": calculate_sharpe_ratio(rebuilded_pnl),
+                #     "Sortino Ratio": calculate_sortino_ratio(rebuilded_pnl),
+                #     "Av. Daily Gain %": calculate_average_daily_gain(rebuilded_pnl, vault["Days Since"]),
+                #     "Gain %": calculate_total_gain_percentage(rebuilded_pnl),
+                # }
+                if len(ret) < 3 or ret.std() == 0:
+                    # null strategy, skip it
                     continue
-                # Calculate Sharpe reliability metrics
-                reliability_metrics = calculate_sharpe_reliability(rebuilded_pnl)
 
-                reliability_metrics_keys = reliability_metrics.keys()
-
+                bankrupt = ret <= -1
+                log_ret = np.log1p(ret, where=~bankrupt, out=np.full_like(ret, -np.inf))
+                cum_ret = np.exp(log_ret.cumsum())
                 metrics = {
-                    "Max DD %": calculate_max_drawdown_on_accountValue(rebuilded_pnl),
+                    "Days from Return(Estimate)": len(ret) * 7,
+                    "Weekly Sharpe Ratio": ret.mean() / ret.std(),
+                    "Weekly Sortino Ratio": (
+                        ret.mean() / ret[ret > 0].std()
+                        if len(ret[ret > 0]) >= 2 and ret[ret > 0].std() != 0
+                        else 1000000
+                    ),
+                    # "Daily Gain %": ret.mean() * 100,
+                    "Gain(simple) %": ret.sum() * 100,
+                    "Annualized Gain(simple) %/yr": ret.mean() / 7 * 365 * 100,
+                    # "Gain(compound) %": (
+                    #     (cum_ret - 1) * 100 if ret.min() > -1 else -100
+                    # ),
+                    "Annualized Median Gain(compound) %/yr": (
+                        ret.mean() - 1 / 2 * ret.var()
+                    )
+                    / 7
+                    * 365
+                    * 100,
+                    "Max DD %": -(cum_ret / np.maximum.accumulate(cum_ret) - 1).min()
+                    * 100,
                     "Rekt": nb_rekt,
                     "Act. Followers": nb_followers,
-                    "Sharpe Ratio": calculate_sharpe_ratio(rebuilded_pnl),
-                    "Sortino Ratio": calculate_sortino_ratio(rebuilded_pnl),
-                    "Av. Daily Gain %": calculate_average_daily_gain(rebuilded_pnl, vault["Days Since"]),
-                    "Gain %": calculate_total_gain_percentage(rebuilded_pnl),
+                    "APR(30D) %": float(details["apr"]),
                 }
+
+                # Calculate Sharpe reliability metrics
+
+                reliability_metrics = calculate_sharpe_reliability(
+                    ret, h=8, SR0=0.1, LT=16  # DailyではなくWeeklyなので。
+                )
+                reliability_metrics_keys = reliability_metrics.keys()
+
                 for key in reliability_metrics_keys:
                     metrics[key] = reliability_metrics[key]
                 # Unpacks the metrics dictionary
@@ -278,6 +397,7 @@ if not cache_used:
     indicators_df = pd.DataFrame(indicators)
     vaults_df = pd.DataFrame(vaults)
     del vaults_df["Leader"]
+
     final_df = vaults_df.merge(indicators_df, on="Name", how="left")
 
     final_df.to_pickle(DATAFRAME_CACHE_FILE)
@@ -300,26 +420,42 @@ if name_filter.strip():  # Check that the filter is not empty
     pattern = "|".join(name_list)  # Create a regex pattern with logical "or"
     filtered_df = filtered_df[filtered_df["Name"].str.contains(pattern, case=False, na=False, regex=True)]
 
+
 # Organize sliders into rows of 3
 sliders = [
+    # from "https://api-ui.hyperliquid.xyz/info"
     {
-        "label": "Min Sharpe Ratio",
-        "column": "Sharpe Ratio",
+        "label": "Min Days from Return(Estimate)",
+        "column": "Days from Return(Estimate)",
         "max": False,
-        "default": 0.4,
+        "default": 90,
+        "step": 1,
+    },
+    {
+        "label": "Min Weekly Sharpe Ratio",
+        "column": "Weekly Sharpe Ratio",
+        "max": False,
+        "default": 0.1,
         "step": 0.05,
     },
     {
-        "label": "Min Sortino Ratio",
-        "column": "Sortino Ratio",
+        "label": "Min Weekly Sortino Ratio",
+        "column": "Weekly Sortino Ratio",
         "max": False,
-        "default": 0.5,
+        "default": 0.1,
         "step": 0.05,
     },
     {
-        "label": "Max Rekt accepted",
-        "column": "Rekt",
-        "max": True,
+        "label": "Min Annualized Gain(simple) %/yr",
+        "column": "Annualized Gain(simple) %/yr",
+        "max": False,
+        "default": 20,
+        "step": 1,
+    },
+    {
+        "label": "Min Annualized Median Gain(compound) %/yr",
+        "column": "Annualized Median Gain(compound) %/yr",
+        "max": False,
         "default": 0,
         "step": 1,
     },
@@ -327,27 +463,13 @@ sliders = [
         "label": "Max DD % accepted",
         "column": "Max DD %",
         "max": True,
-        "default": 15,
+        "default": 50,
         "step": 1,
     },
     {
-        "label": "Min Days Since accepted",
-        "column": "Days Since",
-        "max": False,
-        "default": 100,
-        "step": 1,
-    },
-    {
-        "label": "Min TVL accepted",
-        "column": "Total Value Locked",
-        "max": False,
-        "default": 0,
-        "step": 1,
-    },
-    {
-        "label": "Min APR accepted",
-        "column": "APR %",
-        "max": False,
+        "label": "Max Rekt accepted",
+        "column": "Rekt",
+        "max": True,
         "default": 0,
         "step": 1,
     },
@@ -358,8 +480,35 @@ sliders = [
         "default": 0,
         "step": 1,
     },
-    # {"label": "Min Sharpe Reliability", "column": "Sharpe Reliability", "min": True, "default": 0.05, "step": 0.01},
-    # {"label": "Min Fisher Score", "column": "Fisher Score", "max": False, "default": 0.05, "step": 0.01},
+    {
+        "label": "Min APR(30D) accepted",
+        "column": "APR(30D) %",
+        "max": False,
+        "default": 0,
+        "step": 1,
+    },
+    # from "https://stats-data.hyperliquid.xyz/Mainnet/vaults"
+    {
+        "label": "Min Days Since accepted",
+        "column": "Days Since",
+        "max": False,
+        "default": 90,
+        "step": 1,
+    },
+    {
+        "label": "Min TVL accepted",
+        "column": "Total Value Locked",
+        "max": False,
+        "default": 0,
+        "step": 1,
+    },
+    {
+        "label": "Min APR(7D) accepted",
+        "column": "APR(7D) %",
+        "max": False,
+        "default": 0,
+        "step": 1,
+    },
 ]
 
 for i in range(0, len(sliders), 3):

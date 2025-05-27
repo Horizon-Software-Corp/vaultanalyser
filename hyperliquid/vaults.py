@@ -30,15 +30,19 @@ def update_all_cache_data(show_progress=True):
     # First get vault list
     response = requests.get(VAULTS_URL)
     data = response.json()
+    # print(data[0])
 
     vaults = [
         {
             "Name": vault["summary"]["name"],
-            "APR %": int(vault["apr"] * 100),
+            "APR(7D) %": int(vault["apr"] * 100),
             "Vault": vault["summary"]["vaultAddress"],
             "Leader": vault["summary"]["leader"],
             "Total Value Locked": float(vault["summary"]["tvl"]),
-            "Days Since": (datetime.now() - datetime.fromtimestamp(vault["summary"]["createTimeMillis"] / 1000)).days,
+            "Days Since": (
+                datetime.now()
+                - datetime.fromtimestamp(vault["summary"]["createTimeMillis"] / 1000)
+            ).days,
         }
         for vault in data
         if not vault["summary"]["isClosed"]
@@ -115,3 +119,8 @@ def fetch_vault_details(leader, vault_address):
         return details
     else:
         return None
+
+
+if __name__ == "__main__":
+    vaults = update_all_cache_data()
+    print(fetch_vault_details(vaults[0]["Leader"], vaults[0]["Vault"]))
