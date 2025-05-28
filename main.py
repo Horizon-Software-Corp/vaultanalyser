@@ -8,6 +8,7 @@ import warnings
 import pandas as pd
 import numpy as np
 import streamlit as st
+from pprint import pprint
 
 from hyperliquid.vaults import fetch_vault_details, fetch_vaults_data
 from metrics.drawdown import (
@@ -212,6 +213,7 @@ if not cache_used or True:
                 # 日次だと思ってたが、違う！！！！
                 # 別のデータソースから日次データを取得しなくては・・・
                 # """
+
                 data_source_pnlHistory = details["portfolio"][3][1].get("pnlHistory", [])
                 data_source_accountValueHistory = details["portfolio"][3][1].get("accountValueHistory", [])
                 rebuilded_pnl = []
@@ -325,22 +327,6 @@ if not cache_used or True:
 
                 ret = np.asarray(returns, dtype=float)
                 ret = ret[np.isfinite(ret)]
-                df = pd.DataFrame(data_source_pnlHistory, columns=["Time", "PnL"])
-                df["Time"] = pd.to_datetime(
-                    df["Time"], unit="ms", origin="unix", utc=True
-                )
-                # print(f"Days:{len(ret)}", df)
-                # raise Exception("Debugging vaults")
-
-                # metrics = {
-                #     "Max DD %": calculate_max_drawdown_on_accountValue(rebuilded_pnl),
-                #     "Rekt": nb_rekt,
-                #     "Act. Followers": nb_followers,
-                #     "Sharpe Ratio": calculate_sharpe_ratio(rebuilded_pnl),
-                #     "Sortino Ratio": calculate_sortino_ratio(rebuilded_pnl),
-                #     "Av. Daily Gain %": calculate_average_daily_gain(rebuilded_pnl, vault["Days Since"]),
-                #     "Gain %": calculate_total_gain_percentage(rebuilded_pnl),
-                # }
                 if len(ret) < 3 or ret.std() == 0:
                     # null strategy, skip it
                     continue
@@ -348,6 +334,8 @@ if not cache_used or True:
                 bankrupt = ret <= -1
                 log_ret = np.log1p(ret, where=~bankrupt, out=np.full_like(ret, -np.inf))
                 cum_ret = np.exp(log_ret.cumsum())
+                dd = cum_ret / np.maximum.accumulate(cum_ret) - 1
+
                 metrics = {
                     "Days from Return(Estimate)": len(ret) * 7,
                     "Weekly Sharpe Ratio": ret.mean() / ret.std(),
@@ -368,8 +356,7 @@ if not cache_used or True:
                     / 7
                     * 365
                     * 100,
-                    "Max DD %": -(cum_ret / np.maximum.accumulate(cum_ret) - 1).min()
-                    * 100,
+                    "Max DD %": dd.min() * (-1) * 100,
                     "Rekt": nb_rekt,
                     "Act. Followers": nb_followers,
                     "APR(30D) %": float(details["apr"]),
@@ -499,8 +486,8 @@ sliders = [
         "label": "Min TVL accepted",
         "column": "Total Value Locked",
         "max": False,
-        "default": 0,
-        "step": 1,
+        "default": 10000,
+        "step": 10,
     },
     {
         "label": "Min APR(7D) accepted",
