@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import requests
 import streamlit as st
+import time
 
 # URL for the vaults
 VAULTS_URL = "https://stats-data.hyperliquid.xyz/Mainnet/vaults"
@@ -110,6 +111,7 @@ def fetch_vault_details(leader, vault_address):
     print("Vault DETAIL: Download used", cache_key)
 
     # Otherwise, make the request
+    time.sleep(1)
     payload = {"type": "vaultDetails", "user": leader, "vaultAddress": vault_address}
     response = requests.post(INFO_URL, json=payload)
     if response.status_code == 200:
@@ -118,7 +120,9 @@ def fetch_vault_details(leader, vault_address):
             json.dump(details, f)
         return details
     else:
-        return None
+        raise Exception(
+            f"Failed to fetch vault details: {response.status_code} {response.text}"
+        )
 
 
 if __name__ == "__main__":

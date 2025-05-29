@@ -3,6 +3,7 @@
 
 import json
 import os
+import time
 from datetime import datetime, timedelta
 import warnings
 import pandas as pd
@@ -196,12 +197,25 @@ if not cache_used or True:
     indicators = []
     progress_i = 1
 
+    check_vault_name = None
+    # check_vault_name = "Stabilizer"
+
     for vault in vaults:
+        if check_vault_name and vault["Name"] != check_vault_name:
+            continue
         progress_bar.progress(progress_i / total_steps)
         progress_i = progress_i + 1
         status_text.text(f"Processing vault details ({progress_i}/{total_steps})...")
 
-        details = fetch_vault_details(vault["Leader"], vault["Vault"])
+        while True:
+            try:
+                # Fetch vault details
+                details = fetch_vault_details(vault["Leader"], vault["Vault"])
+                break  # Exit the loop if successful
+            except Exception as e:
+                print(f"\nError fetching details for {vault['Name']}: {e}")
+                st.warning(f"Retrying to fetch details for {vault['Name']}...")
+                time.sleep(5)
 
         nb_followers = 0
         if details and "followers" in details:
@@ -209,6 +223,19 @@ if not cache_used or True:
 
         if details and "portfolio" in details:
             if details["portfolio"][3][0] == "allTime":
+
+                leader_eq = next(
+                    f for f in details["followers"] if f["user"] == "Leader"
+                )["vaultEquity"]
+                leader_eq = float(leader_eq)
+
+                tvl = sum(float(f["vaultEquity"]) for f in details["followers"])
+
+                # --- Leader シェア -------------------------------------------------
+                if tvl == 0:
+                    continue
+                leader_fraction = leader_eq / tvl  # 0.0–1.0
+
                 # """
                 # 日次だと思ってたが、違う！！！！
                 # 別のデータソースから日次データを取得しなくては・・・
@@ -336,7 +363,27 @@ if not cache_used or True:
                 cum_ret = np.exp(log_ret.cumsum())
                 dd = cum_ret / np.maximum.accumulate(cum_ret) - 1
 
+                if check_vault_name:
+                    df = pd.DataFrame(data_source_pnlHistory, columns=["Time", "PnL"])
+                    df2 = pd.DataFrame(
+                        {
+                            "UsedCap": used_capitals,
+                            "TransfIn": transferIns,
+                            "Ret %": ret * 100,
+                            "CumRet %": cum_ret * 100,
+                            "DD %": dd * 100,
+                        }
+                    )
+                    df = pd.concat([df, df2], axis=1)
+                    df = df.astype(float)
+                    df["Time"] = pd.to_datetime(df["Time"], unit="ms")
+                    df["Time"] = df["Time"].dt.date
+
+                    pd.set_option("display.float_format", "{:.2f}".format)
+                    print(df)
+
                 metrics = {
+                    "TVL Leader fraction %": round(leader_fraction * 100, 2),
                     "Days from Return(Estimate)": len(ret) * 7,
                     "Weekly Sharpe Ratio": ret.mean() / ret.std(),
                     "Weekly Sortino Ratio": (
@@ -447,14 +494,14 @@ sliders = [
         "step": 1,
     },
     {
-        "label": "Max DD % accepted",
+        "label": "Max DD %",
         "column": "Max DD %",
         "max": True,
         "default": 50,
         "step": 1,
     },
     {
-        "label": "Max Rekt accepted",
+        "label": "Max Rekt",
         "column": "Rekt",
         "max": True,
         "default": 0,
@@ -468,29 +515,36 @@ sliders = [
         "step": 1,
     },
     {
-        "label": "Min APR(30D) accepted",
+        "label": "Min APR(30D) %",
         "column": "APR(30D) %",
+        "max": False,
+        "default": 0,
+        "step": 1,
+    },
+    {
+        "label": "Min TVL Leader fraction %",
+        "column": "TVL Leader fraction %",
         "max": False,
         "default": 0,
         "step": 1,
     },
     # from "https://stats-data.hyperliquid.xyz/Mainnet/vaults"
     {
-        "label": "Min Days Since accepted",
-        "column": "Days Since",
-        "max": False,
-        "default": 90,
-        "step": 1,
-    },
-    {
-        "label": "Min TVL accepted",
+        "label": "Min TVL",
         "column": "Total Value Locked",
         "max": False,
         "default": 10000,
         "step": 10,
     },
     {
-        "label": "Min APR(7D) accepted",
+        "label": "Min Days Since",
+        "column": "Days Since",
+        "max": False,
+        "default": 90,
+        "step": 1,
+    },
+    {
+        "label": "Min APR(7D)",
         "column": "APR(7D) %",
         "max": False,
         "default": 0,

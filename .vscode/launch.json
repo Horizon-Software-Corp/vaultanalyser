@@ -1,0 +1,32 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+        // VSCode->Runタブで見える名前
+        "name": "Streamlit: run main.py",
+        "type": "python",
+        "request": "launch",
+
+        // Python の “-m streamlit run main.py” と同じ
+        "module": "streamlit",
+        "args": [
+            "run",
+            "${workspaceFolder}/main.py",
+            "--server.runOnSave", "false"   // 保存時自動リロードOFF（pdbループ回避）
+        ],
+
+        // 仮想環境を使っているなら自動検出されるが、
+        // 特定バイナリを明示したいときは "python": "${workspaceFolder}/.venv/bin/python"
+        "justMyCode": false,              // site-packages 内もブレークしたい場合は false
+        "console": "integratedTerminal",  // ⇦ pdb 入力をそのまま打てる
+        "env": {
+            "PYTHONBREAKPOINT": "pdb.set_trace"  // breakpoint() で pdb を使う
+        }
+        }
+
+    ]
+}
