@@ -267,6 +267,7 @@ def calculate_sharpe_reliability(ret: np.ndarray, h=30, SR0=0.1, LT=60):
     Returns:
         dict: Dictionary containing p-values for different tests.
     """
+
     # helper to merge dicts
     def merge(*dicts):
         return dict(chain.from_iterable(d.items() for d in dicts))
@@ -318,3 +319,23 @@ def calculate_sharpe_reliability(ret: np.ndarray, h=30, SR0=0.1, LT=60):
     #     result["debug_windows"] = debug_data
 
     # return result
+
+
+def log_intensity(p: float, p_th: float) -> tuple[float, bool]:
+    """
+    返り値: (inten, is_sig_side)
+        inten ∈ [0,1]   … 0: まっ白, 1: 濃色
+        is_sig_side     … True なら p ≤ p_th (有意側)
+    """
+    if p <= p_th:  # 有意側  → 緑 or 赤（列で決定）
+        p_end = 1e-3
+        inten = (np.log10(p_th) - np.log10(max(p, 1e-300))) / (
+            np.log10(p_th) - np.log10(p_end)
+        )
+        return min(inten, 1.0), True
+    else:  # 非有意側 → 赤 or 緑
+        p_end = 1.0
+        inten = (np.log10(min(p, 1.0)) - np.log10(p_th)) / (
+            np.log10(p_end) - np.log10(p_th)
+        )
+        return min(inten, 1.0), False

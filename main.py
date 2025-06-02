@@ -10,6 +10,8 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 from pprint import pprint
+from typing import Dict, Tuple
+from pandas.api.types import is_numeric_dtype
 
 from hyperliquid.vaults import fetch_vault_details, fetch_vaults_data
 from metrics.drawdown import (
@@ -24,7 +26,9 @@ from metrics.sharpe_reliability import calculate_sharpe_reliability
 # np.seterr(all="raise")
 
 # Page config
-st.set_page_config(page_title="HyperLiquid Vault Analyser", page_icon="📊", layout="wide")
+st.set_page_config(
+    page_title="HyperLiquid Vault Analyser", page_icon="📊", layout="wide"
+)
 
 # Title and description
 st.title("📊 HyperLiquid Vault Analyser")
@@ -101,10 +105,13 @@ def read_date_file(directory="./cache"):
 
 def slider_with_label(label, col, min_value, max_value, default_value, step, key):
     """Create a slider with a custom centered title."""
-    col.markdown(f"<h3 style='text-align: center;'>{label}</h3>", unsafe_allow_html=True)
+    col.markdown(
+        f"<h3 style='text-align: center;'>{label}</h3>", unsafe_allow_html=True
+    )
     if not min_value < max_value:
         col.markdown(
-            f"<p style='text-align: center;'>No choice available ({min_value} for all)</p>", unsafe_allow_html=True
+            f"<p style='text-align: center;'>No choice available ({min_value} for all)</p>",
+            unsafe_allow_html=True,
         )
         return None
 
@@ -123,49 +130,6 @@ def slider_with_label(label, col, min_value, max_value, default_value, step, key
         label_visibility="hidden",
         key=key,
     )
-
-
-def calculate_average_daily_gain(rebuilded_pnl, days_since):
-    """
-    Calculates the average daily gain percentage.
-
-    :param rebuilded_pnl: List of cumulative PnL values ($).
-    :param days_since: Number of days (int).
-    :return: Average daily gain percentage (float).
-    """
-    if len(rebuilded_pnl) < 2 or days_since <= 0:
-        return 0  # Not enough data to calculate
-
-    initial_value = rebuilded_pnl[0]
-    final_value = rebuilded_pnl[-1]
-
-    # Avoid division by zero
-    if initial_value == 0:
-        return 0  # Cannot calculate if the initial value is 0
-
-    average_daily_gain_pct = ((final_value - initial_value) / (initial_value * days_since)) * 100
-    return average_daily_gain_pct
-
-
-def calculate_total_gain_percentage(rebuilded_pnl):
-    """
-    Calculates the total percentage change since the beginning.
-
-    :param rebuilded_pnl: List of cumulative PnL values ($).
-    :return: Total percentage change (float).
-    """
-    if len(rebuilded_pnl) < 2:
-        return 0  # Not enough data to calculate
-
-    initial_value = rebuilded_pnl[0]
-    final_value = rebuilded_pnl[-1]
-
-    # Avoid division by zero
-    if initial_value == 0:
-        return 0  # Cannot calculate if the initial value is 0
-
-    total_gain_pct = ((final_value - initial_value) / initial_value) * 100
-    return total_gain_pct
 
 
 limit_vault = False
@@ -219,7 +183,9 @@ if not cache_used or True:
 
         nb_followers = 0
         if details and "followers" in details:
-            nb_followers = sum(1 for f in details["followers"] if float(f["vaultEquity"]) >= 0.01)
+            nb_followers = sum(
+                1 for f in details["followers"] if float(f["vaultEquity"]) >= 0.01
+            )
 
         if details and "portfolio" in details:
             if details["portfolio"][3][0] == "allTime":
@@ -241,8 +207,12 @@ if not cache_used or True:
                 # 別のデータソースから日次データを取得しなくては・・・
                 # """
 
-                data_source_pnlHistory = details["portfolio"][3][1].get("pnlHistory", [])
-                data_source_accountValueHistory = details["portfolio"][3][1].get("accountValueHistory", [])
+                data_source_pnlHistory = details["portfolio"][3][1].get(
+                    "pnlHistory", []
+                )
+                data_source_accountValueHistory = details["portfolio"][3][1].get(
+                    "accountValueHistory", []
+                )
                 rebuilded_pnl = []
                 final_capital_virtuals = []
                 used_capitals = []
@@ -438,21 +408,35 @@ if not cache_used or True:
 
 
 # Filters
+# Add a column with clickable links
+final_df["Link"] = final_df["Vault"].apply(
+    lambda vault: f"https://app.hyperliquid.xyz/vaults/{vault}"
+)
+
 st.subheader(f"Vaults available ({len(final_df)})")
 filtered_df = final_df
 
 
 # Filter by 'Name' (last filter, free text)
-st.markdown("<h3 style='text-align: center;'>Filter by Name</h3>", unsafe_allow_html=True)
+st.markdown(
+    "<h3 style='text-align: center;'>Filter by Name</h3>", unsafe_allow_html=True
+)
 name_filter = st.text_input(
-    "Name Filter", "", placeholder="Enter names separated by ',' to filter (e.g., toto,tata)...", key="name_filter"
+    "Name Filter",
+    "",
+    placeholder="Enter names separated by ',' to filter (e.g., toto,tata)...",
+    key="name_filter",
 )
 
 # Apply the filter
 if name_filter.strip():  # Check that the filter is not empty
-    name_list = [name.strip() for name in name_filter.split(",")]  # List of names to search for
+    name_list = [
+        name.strip() for name in name_filter.split(",")
+    ]  # List of names to search for
     pattern = "|".join(name_list)  # Create a regex pattern with logical "or"
-    filtered_df = filtered_df[filtered_df["Name"].str.contains(pattern, case=False, na=False, regex=True)]
+    filtered_df = filtered_df[
+        filtered_df["Name"].str.contains(pattern, case=False, na=False, regex=True)
+    ]
 
 
 # Organize sliders into rows of 3
@@ -574,22 +558,194 @@ for i in range(0, len(sliders), 3):
 # Display the table
 st.title(f"Vaults filtered ({len(filtered_df)}) ")
 
-# Add a column with clickable links
-filtered_df["Link"] = filtered_df["Vault"].apply(lambda vault: f"https://app.hyperliquid.xyz/vaults/{vault}")
 
 # Reset index for continuous ranking
-filtered_df = filtered_df.reset_index(drop=True)
+filtered_df = filtered_df.reset_index(drop=True).sort_values(
+    by="Weekly Sharpe Ratio",
+    ascending=False,
+    # ignore_index=True,  # 連番に振り直すなら
+)
 
+
+"""p 値列と数値列を自動で条件付き書式にするユーティリティ"""
+
+
+class MetricsStyler:
+
+    # ────────── 色定義 ──────────
+    _RGB: Dict[str, Tuple[int, int, int]] = {
+        "green": (46, 125, 50),
+        "red": (198, 40, 40),
+    }
+
+    def __init__(self, *, p_th: float = 0.05, zmax: float = 3.0):
+        self.p_th = p_th
+        self.zmax = zmax
+        self._cache: Dict[Tuple[str, float], str] = {}
+
+    # ────────── ユーティリティ ──────────
+    @staticmethod
+    def _blend(rgb: tuple[int, int, int], inten: float) -> str:
+        """
+        inten ∈ [0,1] で白→rgb を補間し、
+        文字色は常に黒にする
+        """
+        r, g, b = rgb
+        r = int(255 * (1 - inten) + r * inten)
+        g = int(255 * (1 - inten) + g * inten)
+        b = int(255 * (1 - inten) + b * inten)
+        return f"background-color: #{r:02x}{g:02x}{b:02x}; color: black;"
+
+    # ────────── p 値の強度 ──────────
+    def _p_intensity(self, p: float) -> Tuple[float, bool]:
+        """log10 スケールの強度と有意側判定を返す"""
+        if p <= self.p_th:  # 有意側
+            inten = (np.log10(self.p_th) - np.log10(max(p, 1e-300))) / (
+                np.log10(self.p_th) - np.log10(1e-3)
+            )
+            return min(inten, 1.0), True
+        inten = (np.log10(min(p, 1.0)) - np.log10(self.p_th)) / (
+            np.log10(1.0) - np.log10(self.p_th)
+        )
+        return min(inten, 1.0), False
+
+    def _style_p(self, p: float, sig_color: str) -> str:
+        if pd.isna(p):  # ★ 追加
+            return "background-color: #000000; color: white;"  # 黒地・白字
+
+        try:
+            p = float(p)
+        except Exception:
+            return ""
+
+        inten, is_sig = self._p_intensity(p)
+        base = self._RGB[
+            sig_color if is_sig else ("red" if sig_color == "green" else "green")
+        ]
+        return self._blend(base, inten)
+
+    # ────────── z-score のスタイル ──────────
+    def _style_z(
+        self, x: float, mu: float, sigma: float, *, higher_is_better: bool
+    ) -> str:
+        # ── NaN は背景＝黒に固定 ─────────────────────────
+        if pd.isna(x):
+            return "background-color: #000000; color: white;"  # 黒地に白字
+
+        try:
+            x = float(x)
+        except Exception:
+            return ""  # 数値以外（str など）は無装飾
+
+        if sigma == 0 or np.isnan(sigma):
+            return ""
+
+        z = (x - mu) / sigma
+        inten = np.clip(abs(z) / self.zmax, 0.0, 1.0)
+
+        good = (z >= 0) if higher_is_better else (z <= 0)
+        base = self._RGB["green" if good else "red"]
+
+        return self._blend(base, inten)
+
+    def _robust_stats(self, series: pd.Series) -> tuple[float, float]:
+        """中央値と MAD 由来のロバスト σ を返す"""
+        s = series.dropna().astype(float)
+        if s.empty:
+            return np.nan, np.nan
+
+        mu = s.median()
+        mad = np.median(np.abs(s - mu))
+        sigma = 1.4826 * mad  # 正規換算
+
+        # 万一 MAD=0（定数列）なら fallback = 通常の std
+        if sigma == 0 or np.isnan(sigma):
+            sigma = s.std(ddof=0)
+
+        return mu, sigma
+
+    # ────────── メインエントリ ──────────
+    def generate_style(self, df: pd.DataFrame, df_all: pd.DataFrame):
+        styler = df.style
+
+        for col in df.columns:
+            if not is_numeric_dtype(df[col]):
+                continue  # 数値列以外は無視
+
+            col_lc = col.lower()  # 小文字キャッシュ
+
+            # ---------- 1) rekt 列：0→緑, 1↑→赤 ----------
+            if "rekt" in col_lc:
+                g_full = self._blend(self._RGB["green"], 1.0)  # 濃い緑
+                r_full = self._blend(self._RGB["red"], 1.0)  # 濃い赤
+                styler = styler.map(
+                    lambda v, _g=g_full, _r=r_full: (
+                        _g if (pd.notna(v) and float(v) == 0) else _r
+                    ),
+                    subset=[col],
+                )
+                continue
+            # ── p 値列 ────────────────────────────────────
+            if col_lc.startswith("p_"):
+                sig_color = (
+                    "green"
+                    if "up" in col_lc
+                    else "red" if "down" in col_lc else "green"
+                )
+
+                styler = styler.applymap(
+                    lambda p, _c=sig_color: self._style_p(p, _c),
+                    subset=[col],
+                )
+                continue
+
+            # ── z-score 列 ───────────────────────────────
+
+            # ① “value” → log スケール
+            log_mode = "value" in col_lc
+            series_for_stats = (
+                np.log(df_all[col].where(df[col] > 0))  # 正の値だけ log
+                if log_mode
+                else df_all[col]
+            )
+
+            mu, sigma = self._robust_stats(series_for_stats)
+
+            # ② “ratio / gain / apr” → µ を 0 に固定
+            if any(k in col_lc for k in ("gain", "apr")):
+                # 典型的ドル金利
+                mu = 9.0
+            if any(k in col_lc for k in ("ratio")):
+                # 予言能力なし
+                mu = 0.0
+
+            if sigma == 0 or pd.isna(sigma):
+                continue  # 定数列はスキップ
+
+            # ③ 指標の「良し悪し」判定
+            hib = not any(k in col_lc for k in ("dd", "drawdown", "rekt"))
+
+            # ④ セルごとのスタイル適用
+            styler = styler.map(
+                lambda x, _m=mu, _s=sigma, _hib=hib, _log=log_mode: self._style_z(
+                    np.log(x) if _log and x > 0 else x, _m, _s, higher_is_better=_hib
+                ),
+                subset=[col],
+            )
+        float_cols = df.select_dtypes(include=["float"]).columns
+        if len(float_cols):
+            styler = styler.format(precision=3, subset=float_cols)
+
+        return styler
+
+
+styler = MetricsStyler(p_th=0.05, zmax=3).generate_style(filtered_df, final_df)
 
 st.dataframe(
-    filtered_df,
+    styler,
     use_container_width=True,
-    # Adjust height based on the number of rows
     height=(len(filtered_df) * 35) + 50,
     column_config={
-        "Link": st.column_config.LinkColumn(
-            "Vault Link",
-            display_text="Vault Link",
-        )
+        "Link": st.column_config.LinkColumn("Vault Link", display_text="Vault Link")
     },
 )
