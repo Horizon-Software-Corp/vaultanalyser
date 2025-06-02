@@ -399,10 +399,12 @@ if not cache_used or True:
 
     # Step 4: Merge indicators with the main table
     indicators_df = pd.DataFrame(indicators)
+
     vaults_df = pd.DataFrame(vaults)
+    vaults_df["APR(7D) %"] = vaults_df["APR(7D) %"].astype(float)
     del vaults_df["Leader"]
 
-    final_df = vaults_df.merge(indicators_df, on="Name", how="left")
+    final_df = vaults_df.merge(indicators_df, on="Name", how="right")
 
     final_df.to_pickle(DATAFRAME_CACHE_FILE)
 
@@ -415,7 +417,7 @@ final_df["Link"] = final_df["Vault"].apply(
 
 st.subheader(f"Vaults available ({len(final_df)})")
 filtered_df = final_df
-
+print(filtered_df.dtypes)
 
 # Filter by 'Name' (last filter, free text)
 st.markdown(
@@ -566,7 +568,6 @@ filtered_df = filtered_df.reset_index(drop=True).sort_values(
     # ignore_index=True,  # 連番に振り直すなら
 )
 
-
 """p 値列と数値列を自動で条件付き書式にするユーティリティ"""
 
 
@@ -641,9 +642,12 @@ class MetricsStyler:
             return ""
 
         z = (x - mu) / sigma
-        inten = np.clip(abs(z) / self.zmax, 0.0, 1.0)
 
         good = (z >= 0) if higher_is_better else (z <= 0)
+        if good:
+            inten = np.clip(abs(z) / self.zmax, 0.0, 1.0)
+        else:
+            inten = np.clip(abs(z) / self.zmax * 10, 0.0, 1.0)
         base = self._RGB["green" if good else "red"]
 
         return self._blend(base, inten)
@@ -685,6 +689,7 @@ class MetricsStyler:
                     subset=[col],
                 )
                 continue
+
             # ── p 値列 ────────────────────────────────────
             if col_lc.startswith("p_"):
                 sig_color = (
@@ -693,7 +698,7 @@ class MetricsStyler:
                     else "red" if "down" in col_lc else "green"
                 )
 
-                styler = styler.applymap(
+                styler = styler.map(
                     lambda p, _c=sig_color: self._style_p(p, _c),
                     subset=[col],
                 )
@@ -712,12 +717,21 @@ class MetricsStyler:
             mu, sigma = self._robust_stats(series_for_stats)
 
             # ② “ratio / gain / apr” → µ を 0 に固定
-            if any(k in col_lc for k in ("gain", "apr")):
+            if any(k in col_lc for k in ["annualized", "apr"]):
                 # 典型的ドル金利
                 mu = 9.0
-            if any(k in col_lc for k in ("ratio")):
+                sigma = 100.0
+            elif any(k in col_lc for k in ["gain", "ratio"]):
                 # 予言能力なし
                 mu = 0.0
+            elif any(k in col_lc for k in ["days"]):
+                # 予言能力なし
+                mu = 90
+                sigma = 30
+            elif any(k in col_lc for k in ["fraction"]):
+                # 予言能力なし
+                mu = 30
+                sigma = 20
 
             if sigma == 0 or pd.isna(sigma):
                 continue  # 定数列はスキップ
