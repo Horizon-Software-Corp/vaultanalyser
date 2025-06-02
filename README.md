@@ -34,6 +34,10 @@ pip install -r requirements.txt
 
 ```bash
 streamlit run main.py
+
+#　もしくは
+
+streamlit rum user_analysis.py
 ```
 
 ### Deployment on Streamlit Cloud
