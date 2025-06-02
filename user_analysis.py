@@ -445,11 +445,23 @@ if not cache_used:
     if not cached_user_data:
         st.warning("⚠️ No user data found. Please process some users first.")
         
-        # Button to process users
-        if st.button(f"🔄 Process {MAX_ADDRESSES_TO_PROCESS} Users from Leaderboard"):
-            with st.spinner("Processing users..."):
-                process_user_addresses(max_addresses=MAX_ADDRESSES_TO_PROCESS, show_progress=True)
-            st.rerun()
+        # User input and button to process users
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            initial_users_to_process = st.number_input(
+                "Initial users to process",
+                min_value=1,
+                max_value=500,
+                value=MAX_ADDRESSES_TO_PROCESS,
+                step=1,
+                help="Number of users to process from leaderboard",
+                key="initial_users_input"
+            )
+        with col2:
+            if st.button(f"🔄 Process {initial_users_to_process} Users from Leaderboard"):
+                with st.spinner("Processing users..."):
+                    process_user_addresses(max_addresses=initial_users_to_process, show_progress=True)
+                st.rerun()
         
         st.stop()
     
@@ -471,12 +483,22 @@ if not cache_used:
 # Display results
 st.subheader(f"Users analyzed ({len(final_df)})")
 
-# Add process more users button
-col1, col2 = st.columns([1, 4])
+# Add process more users button with user input
+col1, col2, col3 = st.columns([1, 1, 3])
 with col1:
-    if st.button(f"➕ Process {MAX_ADDRESSES_TO_PROCESS} More Users"):
+    # User input for number of users to process
+    users_to_process = st.number_input(
+        "Users to process",
+        min_value=1,
+        max_value=500,
+        value=MAX_ADDRESSES_TO_PROCESS,
+        step=1,
+        help="Number of users to process from leaderboard"
+    )
+with col2:
+    if st.button(f"➕ Process {users_to_process} More Users"):
         with st.spinner("Processing more users..."):
-            new_data = process_user_addresses(max_addresses=MAX_ADDRESSES_TO_PROCESS, show_progress=True)
+            new_data = process_user_addresses(max_addresses=users_to_process, show_progress=True)
             if new_data:
                 # Clear cache to force reprocessing
                 if os.path.exists(USER_DATAFRAME_CACHE_FILE):
