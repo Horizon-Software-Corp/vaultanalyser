@@ -11,14 +11,8 @@ import numpy as np
 import streamlit as st
 from pprint import pprint
 from typing import Dict, Tuple
-from pandas.api.types import is_numeric_dtype
 
 from hyperliquid.vaults import fetch_vault_details, fetch_vaults_data
-from metrics.drawdown import (
-    calculate_max_drawdown_on_accountValue,
-    calculate_sharpe_ratio,
-    calculate_sortino_ratio,
-)
 from metrics.sharpe_reliability import calculate_sharpe_reliability
 from metrics.metric_styler import MetricsStyler
 
@@ -33,7 +27,9 @@ st.set_page_config(
 
 # Title and description
 st.title("📊 HyperLiquid Vault Analyser")
-st.caption("🏦 Vault Analysis Mode - For user analysis, run: streamlit run user_analysis.py")
+st.caption(
+    "🏦 Vault Analysis Mode - For user analysis, run: streamlit run user_analysis.py"
+)
 
 # Update time display
 try:
@@ -45,99 +41,10 @@ except (FileNotFoundError, KeyError, ValueError):
     st.warning("⚠️ Cache not found. Data will be fetched fresh.")
 st.markdown("---")  # Add a separator line
 
-
-def check_date_file_exists(directory="./cache"):
-    """
-    Checks if the `date.json` file exists in the specified directory.
-
-    :param directory: Directory where the file is expected to be located (default: /cache).
-    :return: True if the file exists, otherwise False.
-    """
-    # Full file path
-    file_path = os.path.join(directory, "date.json")
-
-    # Check existence
-    return os.path.exists(file_path)
-
-
-def create_date_file(directory="./cache"):
-    """
-    Creates a `date.json` file in the specified directory with the current date.
-
-    :param directory: Directory where the file will be created (default: /cache).
-    """
-    # Ensure the directory exists
-    os.makedirs(directory, exist_ok=True)
-
-    # Full file path
-    file_path = os.path.join(directory, "date.json")
-
-    # Content to write
-    current_date = {"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-    # Write to the file
-    with open(file_path, "w") as file:
-        json.dump(current_date, file, indent=4)
-    print(f"`date.json` file created in {file_path}")
-
-
-def read_date_file(directory="./cache"):
-    """
-    Reads and returns the date saved in the `date.json` file from the specified directory.
-
-    :param directory: Directory where the file is located (default: /cache).
-    :return: The date as a string or None if the file doesn't exist.
-    """
-    # Full file path
-    file_path = os.path.join(directory, "date.json")
-
-    # Check if the file exists
-    if not os.path.exists(file_path):
-        print("`date.json` file not found.")
-        return None
-
-    # Read the file
-    with open(file_path, "r") as file:
-        data = json.load(file)
-        return data.get("date")
-
-
 # Layout for 3 columns
 
 
-def slider_with_label(label, col, min_value, max_value, default_value, step, key):
-    """Create a slider with a custom centered title."""
-    col.markdown(
-        f"<h3 style='text-align: center;'>{label}</h3>", unsafe_allow_html=True
-    )
-    if not min_value < max_value:
-        col.markdown(
-            f"<p style='text-align: center;'>No choice available ({min_value} for all)</p>",
-            unsafe_allow_html=True,
-        )
-        return None
-
-    if default_value < min_value:
-        default_value = min_value
-
-    if default_value > max_value:
-        default_value = max_value
-
-    return col.slider(
-        label,
-        min_value=min_value,
-        max_value=max_value,
-        value=default_value,
-        step=step,
-        label_visibility="hidden",
-        key=key,
-    )
-
-
-limit_vault = False
-
 DATAFRAME_CACHE_FILE = "./cache/dataframe.pkl"
-
 
 # data_range = "allTime"  # choose from ["allTime", "month"]
 data_range = "month"
@@ -159,6 +66,7 @@ elif data_range == "month":
 else:
     raise ValueError(f"Invalid data_range: {data_range}. Choose 'allTime' or 'month'.")
 
+
 cache_used = False
 try:
     final_df = pd.read_pickle(DATAFRAME_CACHE_FILE)
@@ -170,10 +78,6 @@ if not cache_used or True:
 
     # Get vaults data (will use cache if valid)
     vaults = fetch_vaults_data()
-
-    # Limit to the first 3 vaults if needed
-    if limit_vault:
-        vaults = vaults[:3]
 
     # Process vault details from cache
     progress_bar = st.progress(0)
@@ -577,6 +481,36 @@ sliders = [
         "step": 1,
     },
 ]
+
+
+def slider_with_label(label, col, min_value, max_value, default_value, step, key):
+    """Create a slider with a custom centered title."""
+    col.markdown(
+        f"<h3 style='text-align: center;'>{label}</h3>", unsafe_allow_html=True
+    )
+    if not min_value < max_value:
+        col.markdown(
+            f"<p style='text-align: center;'>No choice available ({min_value} for all)</p>",
+            unsafe_allow_html=True,
+        )
+        return None
+
+    if default_value < min_value:
+        default_value = min_value
+
+    if default_value > max_value:
+        default_value = max_value
+
+    return col.slider(
+        label,
+        min_value=min_value,
+        max_value=max_value,
+        value=default_value,
+        step=step,
+        label_visibility="hidden",
+        key=key,
+    )
+
 
 for i in range(0, len(sliders), 3):
     cols = st.columns(3)
