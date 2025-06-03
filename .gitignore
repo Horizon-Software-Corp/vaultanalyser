@@ -3,3 +3,7 @@ hyperliquid/__pycache__/
 metrics/__pycache__/
 venv
 vault_details_cache.json
+**/user_cache/user_data
+leaderboard.json
+processed_addresses.txt
+user_dataframe.pkl
