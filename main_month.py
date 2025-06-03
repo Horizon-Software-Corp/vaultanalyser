@@ -163,7 +163,7 @@ if not cache_used or True:
     progress_i = 1
 
     check_vault_name = None
-    # check_vault_name = "Stabilizer"
+    # check_vault_name = "manicpt"
 
     s_return_list = []
 
@@ -304,36 +304,12 @@ if not cache_used or True:
                     bankrupts.append(bankrupt)
                     timestamps.append(data_source_pnlHistory[idx][0])
 
-                #
-                # if max(returns) > 1 and pnl > 1000:
-                if is_print_bunkrupt and False:
-                    df = pd.DataFrame(data_source_pnlHistory, columns=["Time", "PnL"])
-                    df2 = pd.DataFrame(
-                        data_source_accountValueHistory,
-                        columns=["Time", "Account Val"],
-                    )
-                    df = pd.merge(df, df2, on="Time", how="left").astype(float)
-                    df = pd.concat(
-                        [
-                            df,
-                            pd.DataFrame(transferIns, columns=["TransfIn"]),
-                            pd.DataFrame(used_capitals, columns=["UsedCapt"]),
-                            pd.DataFrame(returns, columns=["Returns"]),
-                            pd.DataFrame(rebuilded_pnl, columns=["RebuildPnL"]),
-                            pd.DataFrame(bankrupts, columns=["Rekt"]),
-                        ],
-                        axis=1,
-                    )
-                    pd.set_option("display.max_columns", None)  # Show all cols
-                    df = df.drop(axis=1, columns=["Time"])
-                    pd.set_option("display.float_format", "{:.4g}".format)
-                    print(f"Vault {vault['Name']} has beel left bunkrupt:\n{df}")
-
+                index_ts = pd.to_datetime(
+                    timestamps, unit="ms", origin="unix", utc=True
+                )
                 ret = pd.Series(
                     returns,
-                    index=pd.to_datetime(
-                        timestamps, unit="ms", origin="unix", utc=True
-                    ),
+                    index=index_ts,
                     name=vault["Name"],
                     dtype=float,
                 )
@@ -366,11 +342,23 @@ if not cache_used or True:
                 dd = cum_ret / np.maximum.accumulate(cum_ret) - 1
 
                 if check_vault_name:
-                    df = pd.DataFrame(data_source_pnlHistory, columns=["Time", "PnL"])
+                    pnls = [float(value[1]) for value in data_source_pnlHistory]
+                    df = (
+                        pd.DataFrame(
+                            {
+                                "PnL": pnls,
+                                "UsedCap": used_capitals,
+                                "TransfIn": transferIns,
+                            },
+                            index=index_ts,
+                        )
+                        .resample("D", label="left", closed="left")
+                        .sum()
+                    )
+                    # print(pnls)
+
                     df2 = pd.DataFrame(
                         {
-                            "UsedCap": used_capitals,
-                            "TransfIn": transferIns,
                             "Ret %": ret * 100,
                             "CumRet %": cum_ret * 100,
                             "DD %": dd * 100,
@@ -378,10 +366,9 @@ if not cache_used or True:
                     )
                     df = pd.concat([df, df2], axis=1)
                     df = df.astype(float)
-                    df["Time"] = pd.to_datetime(df["Time"], unit="ms")
-                    df["Time"] = df["Time"].dt.date
 
                     pd.set_option("display.float_format", "{:.2f}".format)
+                    pd.set_option("display.max_rows", 1000)  # Show all rows
                     print(df)
 
                 metrics = {

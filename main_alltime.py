@@ -369,11 +369,23 @@ if not cache_used or True:
                 dd = cum_ret / np.maximum.accumulate(cum_ret) - 1
 
                 if check_vault_name:
-                    df = pd.DataFrame(data_source_pnlHistory, columns=["Time", "PnL"])
+                    pnls = [float(value[1]) for value in data_source_pnlHistory]
+                    df = (
+                        pd.DataFrame(
+                            {
+                                "PnL": pnls,
+                                "UsedCap": used_capitals,
+                                "TransfIn": transferIns,
+                            },
+                            index=index_ts,
+                        )
+                        .resample("D", label="left", closed="left")
+                        .sum()
+                    )
+                    # print(pnls)
+
                     df2 = pd.DataFrame(
                         {
-                            "UsedCap": used_capitals,
-                            "TransfIn": transferIns,
                             "Ret %": ret * 100,
                             "CumRet %": cum_ret * 100,
                             "DD %": dd * 100,
@@ -381,10 +393,9 @@ if not cache_used or True:
                     )
                     df = pd.concat([df, df2], axis=1)
                     df = df.astype(float)
-                    df["Time"] = pd.to_datetime(df["Time"], unit="ms")
-                    df["Time"] = df["Time"].dt.date
 
                     pd.set_option("display.float_format", "{:.2f}".format)
+                    pd.set_option("display.max_rows", 1000)  # Show all rows
                     print(df)
 
                 metrics = {
