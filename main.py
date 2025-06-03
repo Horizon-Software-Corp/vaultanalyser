@@ -164,6 +164,8 @@ if not cache_used or True:
     check_vault_name = None
     # check_vault_name = "Stabilizer"
 
+    s_return_list = []
+
     for vault in vaults:
         if check_vault_name and vault["Name"] != check_vault_name:
             continue
@@ -219,6 +221,7 @@ if not cache_used or True:
                 returns = []
                 bankrupts = []
                 transferIns = []
+                timestamps = []
 
                 balance = start_balance_amount = 1000000
                 nb_rekt = 0
@@ -236,6 +239,7 @@ if not cache_used or True:
                         rebuilded_pnl.append(balance)
                         bankrupts.append(0)
                         transferIns.append(0)
+                        timestamps.append(data_source_pnlHistory[idx][0])
                         continue
 
                     # Capital at time T
@@ -278,7 +282,7 @@ if not cache_used or True:
                     if used_capital == 0:
                         ret = 0
                     else:
-                        ret = pnl / used_capital
+                        ret = max(-1, pnl / used_capital)
                     returns.append(ret)
 
                     # Verify timestamp consistency
@@ -296,6 +300,7 @@ if not cache_used or True:
                         balance = round(balance * (1 + ret), 2)
                     rebuilded_pnl.append(balance)
                     bankrupts.append(bankrupt)
+                    timestamps.append(data_source_pnlHistory[idx][0])
 
                 #
                 # if max(returns) > 1 and pnl > 1000:
@@ -317,18 +322,37 @@ if not cache_used or True:
                         ],
                         axis=1,
                     )
-                    pd.set_option("display.max_columns", None)  # Show all rows
+                    pd.set_option("display.max_columns", None)  # Show all cols
                     df = df.drop(axis=1, columns=["Time"])
                     pd.set_option("display.float_format", "{:.4g}".format)
                     print(f"Vault {vault['Name']} has beel left bunkrupt:\n{df}")
 
-                ret = np.asarray(returns, dtype=float)
-                ret = ret[np.isfinite(ret)]
-                if len(ret) < 3 or ret.std() == 0:
-                    # null strategy, skip it
+                ret = pd.Series(
+                    returns,
+                    index=pd.to_datetime(
+                        timestamps, unit="ms", origin="unix", utc=True
+                    ),
+                    name=vault["Name"],
+                    dtype=float,
+                )
+                ret_raw = ret.copy()
+                # weekly resampling by close
+                # ret = ret.resample("W-MON", label="left", closed="left").last()
+                # ret.fillna(0)  # スカスカなので
+
+                # pd.set_option("display.max_rows", 1000)  # Show
+                # if ret.isna().any():
+                #     raise ValueError(
+                #         f"Vault {vault['Name']} has NaN values in returns.:{ret}"
+                #     )
+
+                if ret.std() == 0:
                     continue
 
                 bankrupt = ret <= -1
+                # if bankrupt.any():
+                #     print(ret_raw)
+                #     print(ret)
                 log_ret = np.log1p(ret, where=~bankrupt, out=np.full_like(ret, -np.inf))
                 cum_ret = np.exp(log_ret.cumsum())
                 dd = cum_ret / np.maximum.accumulate(cum_ret) - 1
@@ -382,7 +406,7 @@ if not cache_used or True:
                 # Calculate Sharpe reliability metrics
 
                 reliability_metrics = calculate_sharpe_reliability(
-                    ret, h=8, SR0=0.1, LT=16  # DailyではなくWeeklyなので。
+                    ret.values, h=8, SR0=0.1, LT=16  # DailyではなくWeeklyなので。
                 )
                 reliability_metrics_keys = reliability_metrics.keys()
 
@@ -417,7 +441,6 @@ final_df["Link"] = final_df["Vault"].apply(
 
 st.subheader(f"Vaults available ({len(final_df)})")
 filtered_df = final_df
-print(filtered_df.dtypes)
 
 # Filter by 'Name' (last filter, free text)
 st.markdown(
