@@ -10,7 +10,8 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 from pprint import pprint
-
+from typing import Dict, Tuple
+from pandas.api.types import is_numeric_dtype
 
 from hyperliquid.vaults import fetch_vault_details, fetch_vaults_data
 from metrics.drawdown import (
@@ -134,8 +135,28 @@ def slider_with_label(label, col, min_value, max_value, default_value, step, key
 
 limit_vault = False
 
-
 DATAFRAME_CACHE_FILE = "./cache/dataframe.pkl"
+
+
+# data_range = "allTime"  # choose from ["allTime", "month"]
+data_range = "month"
+# data_range = "allTime"
+
+if data_range == "allTime":
+    data_index = 3
+    sampling_days = 7
+    resample_rule = "W-MON"
+    sharpe_prefix = "Weekly"
+    separation_params = {"h": 8, "SR0": 0.1, "LT": 16}
+
+elif data_range == "month":
+    data_index = 2
+    sampling_days = 1
+    resample_rule = "D"
+    sharpe_prefix = "Daily"
+    separation_params = {"h": 8, "SR0": 0.1, "LT": None}
+else:
+    raise ValueError(f"Invalid data_range: {data_range}. Choose 'allTime' or 'month'.")
 
 cache_used = False
 try:
@@ -162,7 +183,7 @@ if not cache_used or True:
     progress_i = 1
 
     check_vault_name = None
-    # check_vault_name = "Stabilizer"
+    # check_vault_name = "manicpt"
 
     s_return_list = []
 
@@ -190,9 +211,9 @@ if not cache_used or True:
             )
 
         if details and "portfolio" in details:
-            if details["portfolio"][3][0] == "allTime":
-                sampling_days = 7
+            data_chosen = details["portfolio"][data_index]
 
+            if data_chosen[0] == data_range:
                 leader_eq = next(
                     f for f in details["followers"] if f["user"] == "Leader"
                 )["vaultEquity"]
@@ -210,10 +231,8 @@ if not cache_used or True:
                 # 別のデータソースから日次データを取得しなくては・・・
                 # """
 
-                data_source_pnlHistory = details["portfolio"][3][1].get(
-                    "pnlHistory", []
-                )
-                data_source_accountValueHistory = details["portfolio"][3][1].get(
+                data_source_pnlHistory = data_chosen[1].get("pnlHistory", [])
+                data_source_accountValueHistory = data_chosen[1].get(
                     "accountValueHistory", []
                 )
                 rebuilded_pnl = []
@@ -303,45 +322,21 @@ if not cache_used or True:
                     bankrupts.append(bankrupt)
                     timestamps.append(data_source_pnlHistory[idx][0])
 
-                #
-                # if max(returns) > 1 and pnl > 1000:
-                if is_print_bunkrupt and False:
-                    df = pd.DataFrame(data_source_pnlHistory, columns=["Time", "PnL"])
-                    df2 = pd.DataFrame(
-                        data_source_accountValueHistory,
-                        columns=["Time", "Account Val"],
-                    )
-                    df = pd.merge(df, df2, on="Time", how="left").astype(float)
-                    df = pd.concat(
-                        [
-                            df,
-                            pd.DataFrame(transferIns, columns=["TransfIn"]),
-                            pd.DataFrame(used_capitals, columns=["UsedCapt"]),
-                            pd.DataFrame(returns, columns=["Returns"]),
-                            pd.DataFrame(rebuilded_pnl, columns=["RebuildPnL"]),
-                            pd.DataFrame(bankrupts, columns=["Rekt"]),
-                        ],
-                        axis=1,
-                    )
-                    pd.set_option("display.max_columns", None)  # Show all cols
-                    df = df.drop(axis=1, columns=["Time"])
-                    pd.set_option("display.float_format", "{:.4g}".format)
-                    print(f"Vault {vault['Name']} has beel left bunkrupt:\n{df}")
-
+                index_ts = pd.to_datetime(
+                    timestamps, unit="ms", origin="unix", utc=True
+                )
                 ret = pd.Series(
                     returns,
-                    index=pd.to_datetime(
-                        timestamps, unit="ms", origin="unix", utc=True
-                    ),
+                    index=index_ts,
                     name=vault["Name"],
                     dtype=float,
                 )
                 is_resample = True
                 if is_resample:
                     ret_raw = ret.copy()
-                    # weekly resampling by close
+                    # daily resampling by close
                     ret = (1 + ret).resample(
-                        "W-MON", label="left", closed="left"
+                        resample_rule, label="left", closed="left"
                     ).prod() - 1
                     ret.fillna(0)  # スカスカなので
 
@@ -350,21 +345,17 @@ if not cache_used or True:
                 #     raise ValueError(
                 #         f"Vault {vault['Name']} has NaN values in returns.:{ret}"
                 #     )
+
                 if ret.std() == 0:
                     continue
 
                 bankrupt = ret <= -1
                 valid = ~bankrupt
-                # if bankrupt.any():
-                #     print(
-                #         f"Vault {vault['Name']} has bankrupt returns: \n{ret[bankrupt]}"
-                #     )
                 # warnings.filterwarnings(
                 #     "error", message="divide by zero encountered in log1p"
                 # )
                 log_ret = pd.Series(-np.inf, index=ret.index, dtype=float)
                 log_ret.loc[valid] = np.log1p(ret.loc[valid])
-
                 cum_ret = np.exp(log_ret.cumsum())
                 dd = cum_ret / np.maximum.accumulate(cum_ret) - 1
 
@@ -379,7 +370,7 @@ if not cache_used or True:
                             },
                             index=index_ts,
                         )
-                        .resample("D", label="left", closed="left")
+                        .resample(resample_rule, label="left", closed="left")
                         .sum()
                     )
                     # print(pnls)
@@ -401,8 +392,8 @@ if not cache_used or True:
                 metrics = {
                     "TVL Leader fraction %": round(leader_fraction * 100, 2),
                     "Days from Return(Estimate)": len(ret) * sampling_days,
-                    "Weekly Sharpe Ratio": ret.mean() / ret.std(),
-                    "Weekly Sortino Ratio": (
+                    f"{sharpe_prefix} Sharpe Ratio": ret.mean() / ret.std(),
+                    f"{sharpe_prefix} Sortino Ratio": (
                         ret.mean() / ret[ret > 0].std()
                         if len(ret[ret > 0]) >= 2 and ret[ret > 0].std() != 0
                         else 1000000
@@ -431,7 +422,7 @@ if not cache_used or True:
                 # Calculate Sharpe reliability metrics
 
                 reliability_metrics = calculate_sharpe_reliability(
-                    ret.values, h=8, SR0=0.1, LT=16  # DailyではなくWeeklyなので。
+                    ret.values, **separation_params  # monthlyは30本しかない
                 )
                 reliability_metrics_keys = reliability_metrics.keys()
 
@@ -500,24 +491,24 @@ sliders = [
         "step": 1,
     },
     {
-        "label": "Min Weekly Sharpe Ratio",
-        "column": "Weekly Sharpe Ratio",
+        "label": f"Min {sharpe_prefix} Sharpe Ratio",
+        "column": f"{sharpe_prefix} Sharpe Ratio",
         "max": False,
-        "default": 0.2,
+        "default": 0.1,
         "step": 0.05,
     },
     {
-        "label": "Min Weekly Sortino Ratio",
-        "column": "Weekly Sortino Ratio",
+        "label": f"Min {sharpe_prefix} Sortino Ratio",
+        "column": f"{sharpe_prefix} Sortino Ratio",
         "max": False,
-        "default": 0.0,
+        "default": 0.1,
         "step": 0.05,
     },
     {
         "label": "Min Annualized Gain(simple) %/yr",
         "column": "Annualized Gain(simple) %/yr",
         "max": False,
-        "default": 10,
+        "default": 20,
         "step": 1,
     },
     {
@@ -611,15 +602,16 @@ st.title(f"Vaults filtered ({len(filtered_df)}) ")
 
 # Reset index for continuous ranking
 filtered_df = filtered_df.reset_index(drop=True).sort_values(
-    by="Weekly Sharpe Ratio",
+    by=f"{sharpe_prefix} Sharpe Ratio",
     ascending=False,
     # ignore_index=True,  # 連番に振り直すなら
 )
 
 """p 値列と数値列を自動で条件付き書式にするユーティリティ"""
 
-
-styler = MetricsStyler(p_th=0.05, zmax=3).generate_style(filtered_df, final_df)
+styler = MetricsStyler(p_th=0.05, zmax=3).generate_style(
+    filtered_df, final_df, data_range
+)
 
 st.dataframe(
     styler,

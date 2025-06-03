@@ -80,7 +80,7 @@ class MetricsStyler:
         if good:
             inten = np.clip(abs(z) / self.zmax, 0.0, 1.0)
         else:
-            inten = np.clip(abs(z) / self.zmax * 10, 0.0, 1.0)
+            inten = np.clip(abs(z) / (self.zmax * 0.05), 0.0, 1.0)
         base = self._RGB["green" if good else "red"]
 
         return self._blend(base, inten)
@@ -102,7 +102,9 @@ class MetricsStyler:
         return mu, sigma
 
     # ────────── メインエントリ ──────────
-    def generate_style(self, df: pd.DataFrame, df_all: pd.DataFrame):
+    def generate_style(
+        self, df: pd.DataFrame, df_all: pd.DataFrame, data_range: str = "allTime"
+    ):
         styler = df.style
 
         for col in df.columns:
@@ -159,8 +161,12 @@ class MetricsStyler:
                 mu = 0.0
             elif any(k in col_lc for k in ["days"]):
                 # 予言能力なし
-                mu = 90
-                sigma = 30
+                if data_range == "allTime":
+                    mu = 365
+                    sigma = 180
+                elif data_range == "month":
+                    mu = 20
+                    sigma = 10
             elif any(k in col_lc for k in ["fraction"]):
                 # 予言能力なし
                 mu = 30
