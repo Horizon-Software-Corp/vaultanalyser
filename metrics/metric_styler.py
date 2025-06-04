@@ -142,9 +142,10 @@ class MetricsStyler:
             log_mode = "Value" in col
             eps = 10e-10
             scaling_func = lambda x: (np.log10(x + eps) if log_mode else x)
-            series_for_stats = df_all[col].apply(scaling_func)
 
-            mu, sigma = self._robust_stats(series_for_stats)
+            if not any(k in col for k in ["Weight"]):
+                series_for_stats = df_all[col].apply(scaling_func)
+                mu, sigma = self._robust_stats(series_for_stats)
 
             # ② “ratio / gain / apr” → µ を 0 に固定
             if any(k in col for k in ["Annualized", "APR"]):
@@ -172,6 +173,9 @@ class MetricsStyler:
             elif any(k in col for k in ["Value"]):
                 mu = scaling_func(100000)
                 sigma = 2
+            elif any(k in col for k in ["Weight"]):
+                mu = 0
+                sigma = 0.1
 
             if sigma == 0 or pd.isna(sigma):
                 continue  # 定数列はスキップ

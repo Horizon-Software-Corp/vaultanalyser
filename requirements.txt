@@ -42,4 +42,4 @@ tzdata==2024.2
 urllib3==2.3.0
 ipykernel
 matplotlib
-Riskfolio-Lib
+Riskfolio-Lib=7.0.1

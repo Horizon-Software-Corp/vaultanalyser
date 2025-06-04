@@ -26,6 +26,7 @@ from hyperliquid.users import (
 )
 from metrics.sharpe_reliability import calculate_sharpe_reliability
 from metrics.metric_styler import MetricsStyler
+from metrics.portfolio_optimizer import optimize_portfolio
 
 
 # ────────────────────────────────────────────────────────────────
@@ -45,10 +46,21 @@ class DataRange(StrEnum):
 # Parameters
 # ────────────────────────────────────────────────────────────────
 
-data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
+data_type = DataType.VAULT  # Choose from [DataType.VAULT, DataType.USER]
 data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
+
+
+# ────────────────────────────────────────────────────────────────
+# Parameters for weight calculation
+# ────────────────────────────────────────────────────────────────
+N_ITEMS = 5
+sort_col_weight = "Sharpe Ratio"  # Column to sort by
+rf_rate = 0.09  # Annualized risk-free rate
+is_short = False  # BTC, ETHなどの価格の系列を入れ、そこだけshort許可してもいいかも
+max_leverage = 1
+
 
 # ────────────────────────────────────────────────────────────────
 
@@ -124,13 +136,14 @@ def new_process_user_data_for_analysis(user_data_list):
     progress_bar = st.progress(0)
     status_text = st.empty()
     indicators = []
+    rets = []
     total_steps = len(user_data_list)
 
-    for i, user_data in enumerate(user_data_list):
+    for itr, user_data in enumerate(user_data_list):
 
-        progress_bar.progress((i + 1) / total_steps)
+        progress_bar.progress((itr + 1) / total_steps)
         status_text.text(
-            f"Analyzing user {i+1}/{len(user_data_list)}: {user_data[identifier_name.lower()][:15]}..."
+            f"Analyzing user {itr + 1}/{len(user_data_list)}: {user_data[identifier_name.lower()][:15]}..."
         )
 
         portfolio_data = user_data["portfolio"]
@@ -226,10 +239,10 @@ def new_process_user_data_for_analysis(user_data_list):
 
                     # Gain/loss ratio
                     if used_capital == 0:
-                        ret = 0
+                        return_ = 0
                     else:
-                        ret = max(-1, pnl / used_capital)
-                    returns.append(ret)
+                        return_ = max(-1, pnl / used_capital)
+                    returns.append(return_)
 
                     # Verify timestamp consistency
                     if (
@@ -243,7 +256,7 @@ def new_process_user_data_for_analysis(user_data_list):
                     if bankrupt:
                         pass
                     else:
-                        balance = round(balance * (1 + ret), 2)
+                        balance = round(balance * (1 + return_), 2)
                     rebuilded_pnl.append(balance)
                     bankrupts.append(bankrupt)
                     timestamps.append(data_source_pnlHistory[idx][0])
@@ -254,17 +267,15 @@ def new_process_user_data_for_analysis(user_data_list):
                 ret = pd.Series(
                     returns,
                     index=index_ts,
-                    name=identifier,
                     dtype=float,
                 )
                 is_resample = True
                 if is_resample:
-                    ret_raw = ret.copy()
                     # daily resampling by close
                     ret = (1 + ret).resample(
                         resample_rule, label="left", closed="left"
                     ).prod() - 1
-                    ret.fillna(0)  # スカスカなので
+                    ret.fillna(0, inplace=True)  # スカスカなので
 
                 # pd.set_option("display.max_rows", 1000)  # Show
                 # if ret.isna().any():
@@ -273,6 +284,9 @@ def new_process_user_data_for_analysis(user_data_list):
                 #     )
 
                 if ret.std() == 0:
+                    continue
+
+                if index_ts[0] > pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=28):
                     continue
 
                 bankrupt = ret <= -1
@@ -372,11 +386,14 @@ def new_process_user_data_for_analysis(user_data_list):
                     metrics[key] = reliability_metrics[key]
                 # Unpacks the metrics dictionary
                 metrics[identifier_name] = identifier
+
                 indicators.append(metrics)
+                rets.append(ret)
+                break
 
     progress_bar.empty()
     status_text.empty()
-    return indicators
+    return indicators, rets
 
 
 cache_used = False
@@ -398,8 +415,9 @@ if not cache_used:
         user_data_list = get_all_vault_data(vaults)
 
         st.info(f"🔄 Analyzing {len(user_data_list)} cached users...")
-        indicators = new_process_user_data_for_analysis(user_data_list)
+        indicators, rets = new_process_user_data_for_analysis(user_data_list)
         indicators_df = pd.DataFrame(indicators)
+        df_rets = pd.DataFrame(rets).T.dropna(axis=0, how="any")
 
         vaults_df = pd.DataFrame(vaults)
         vaults_df["APR(7D) %"] = vaults_df["APR(7D) %"].astype(float)
@@ -448,7 +466,7 @@ if not cache_used:
 
         # Process the cached data
         st.info(f"🔄 Processing {len(user_data_list)} cached users...")
-        indicators = new_process_user_data_for_analysis(user_data_list)
+        indicators, rets = new_process_user_data_for_analysis(user_data_list)
 
         if not indicators:
             st.error("❌ No valid user data could be processed.")
@@ -456,6 +474,7 @@ if not cache_used:
 
         # Create DataFrame
         final_df = pd.DataFrame(indicators)
+        df_rets = pd.DataFrame(rets).T.dropna(axis=0, how="any")
 
         # Add a column with clickable links to HyperLiquid
         final_df["Link"] = final_df["Address"].apply(
@@ -659,6 +678,7 @@ for i in range(0, len(sliders), 3):
     for slider, col in zip(sliders[i : i + 3], cols):
         column = slider["column"]
         if column in filtered_df.columns:
+            # 　手で指定した値
             value = slider_with_label(
                 slider["label"],
                 col,
@@ -675,18 +695,55 @@ for i in range(0, len(sliders), 3):
                     filtered_df = filtered_df[filtered_df[column] >= value]
 
 
-# Reset index for continuous ranking
-sort_col = f"{sharpe_prefix} Sharpe Ratio"
-filtered_df = filtered_df.reset_index(drop=True).sort_values(
-    by=sort_col,
-    ascending=False,
-    # ignore_index=True,  # 連番に振り直すなら
+# -────────────────────────────────────────────────────────────
+# weights calculation
+# -────────────────────────────────────────────────────────────
+if sort_col_weight == "Sharpe Ratio":
+    sort_col_weight = f"{sharpe_prefix} Sharpe Ratio"
+    ascending = False
+elif sort_col_weight == "Sortino Ratio":
+    sort_col_weight = f"{sharpe_prefix} Sortino Ratio"
+    ascending = False
+else:
+    raise ValueError(
+        f"Invalid sort_col_weight: {sort_col_weight}. Choose 'Sharpe Ratio' or 'Sortino Ratio'."
+    )
+
+
+filtered_weight_df = filtered_df.sort_values(
+    by=sort_col_weight, ascending=ascending
+)  # こっちはrowが資産名
+# それぞれのretごとに全ての時間のデータを使って計算したsharpe ratio
+print("\n")
+print(filtered_weight_df[sort_col_weight])
+
+idx_weights = filtered_weight_df.index[:N_ITEMS]  # indexはrowを撮ってくるので、資産名
+df_rets_weight = df_rets.loc[
+    :, idx_weights
+]  # df_retsは.Tしてあるので、colが資産名 -> 第二スライス
+
+# dropna(axis=0, how="any") したあとのデータを使って計算したsharpe ratio
+print("\n")
+print("期間を共有するようdropna")
+print(df_rets_weight.mean() / df_rets_weight.std())  # これでシャープレシオが計算できる
+print("\n")
+
+weights = optimize_portfolio(
+    df_rets_weight, rf_rate=rf_rate, is_short=is_short, max_leverage=max_leverage
 )
+weights_other = pd.Series(0.0, index=filtered_weight_df.index[N_ITEMS:], name="Weights")
+weights_all = pd.concat([weights, weights_other], axis=0)
+
+filtered_df = pd.concat([weights_all, filtered_weight_df], axis=1)
+
+# -────────────────────────────────────────────────────────────
+# Sort the DataFrame by Sharpe Ratio
+
+sort_col = f"{sharpe_prefix} Sharpe Ratio"
+filtered_df = filtered_df.sort_values(by=sort_col, ascending=False)
 orig_len = len(filtered_df)
-filtered_df = filtered_df.iloc[:MAX_ITEMS]
-
-
 # Display the table
+filtered_df = filtered_df.iloc[:MAX_ITEMS]
 if orig_len > MAX_ITEMS:
     st.title(
         f"{data_type} filtered ({orig_len} -> Top {MAX_ITEMS} by '{sort_col}' are shown.) "
