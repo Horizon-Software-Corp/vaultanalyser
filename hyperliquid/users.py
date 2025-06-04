@@ -30,25 +30,25 @@ def ensure_user_cache_dirs():
 def fetch_leaderboard():
     """Fetch leaderboard data with caching."""
     ensure_user_cache_dirs()
-    
+
     # Check if leaderboard cache exists
     if os.path.exists(LEADERBOARD_CACHE_FILE):
         print("Leaderboard cache found, skipping download")
         with open(LEADERBOARD_CACHE_FILE, "r") as f:
             return json.load(f)
-    
+
     print("Downloading leaderboard...")
-    
+
     # Fetch leaderboard data (GET request)
     response = requests.get(LEADERBOARD_URL)
-    
+
     if response.status_code == 200:
         leaderboard_data = response.json()
-        
+
         # Save to cache
         with open(LEADERBOARD_CACHE_FILE, "w") as f:
             json.dump(leaderboard_data, f, indent=2)
-        
+
         print(f"Leaderboard saved with {len(leaderboard_data)} entries")
         return leaderboard_data
     else:
@@ -59,7 +59,7 @@ def get_processed_addresses():
     """Get list of already processed addresses."""
     if not os.path.exists(PROCESSED_ADDRESSES_FILE):
         return set()
-    
+
     with open(PROCESSED_ADDRESSES_FILE, "r") as f:
         return set(line.strip() for line in f if line.strip())
 
@@ -79,26 +79,26 @@ def add_failed_address(address, error):
 def fetch_user_portfolio(user_address):
     """Fetch user portfolio data with caching."""
     cache_file = os.path.join(USER_DATA_DIR, f"{user_address}.json")
-    
+
     # Check if cache exists
     if os.path.exists(cache_file):
         print(f"Cache found for {user_address}")
         with open(cache_file, "r") as f:
             return json.load(f)
-    
+
     print(f"Downloading portfolio for {user_address}")
-    
+
     # Fetch user portfolio
     payload = {"type": "portfolio", "user": user_address}
     response = requests.post(USER_INFO_URL, json=payload)
-    
+
     if response.status_code == 200:
         portfolio_data = response.json()
-        
+
         # Save to cache
         with open(cache_file, "w") as f:
             json.dump(portfolio_data, f, indent=2)
-        
+
         return portfolio_data
     else:
         raise Exception(f"Failed to fetch portfolio: {response.status_code}")
@@ -107,7 +107,7 @@ def fetch_user_portfolio(user_address):
 def extract_addresses_from_leaderboard(leaderboard_data):
     """Extract addresses from leaderboard data in ranking order."""
     addresses = []
-    
+
     # Check if leaderboard_data has the correct structure
     if isinstance(leaderboard_data, dict) and "leaderboardRows" in leaderboard_data:
         leaderboard_rows = leaderboard_data["leaderboardRows"]
@@ -116,138 +116,169 @@ def extract_addresses_from_leaderboard(leaderboard_data):
     else:
         print(f"Unexpected leaderboard data structure: {type(leaderboard_data)}")
         return addresses
-    
+
     for entry in leaderboard_rows:
         if "ethAddress" in entry:
             addresses.append(entry["ethAddress"])
-    
+
     return addresses
 
 
 def process_user_addresses(max_addresses=MAX_ADDRESSES_TO_PROCESS, show_progress=True):
     """Process user addresses from leaderboard."""
     ensure_user_cache_dirs()
-    
+
     # Get leaderboard
     leaderboard_data = fetch_leaderboard()
     all_addresses = extract_addresses_from_leaderboard(leaderboard_data)
-    
+
     # Get already processed addresses
     processed_addresses = get_processed_addresses()
-    
+
     # Filter unprocessed addresses
-    unprocessed_addresses = [addr for addr in all_addresses if addr not in processed_addresses]
-    
+    unprocessed_addresses = [
+        addr for addr in all_addresses if addr not in processed_addresses
+    ]
+
     # Limit to max_addresses
     addresses_to_process = unprocessed_addresses[:max_addresses]
-    
+
     print(f"Total addresses in leaderboard: {len(all_addresses)}")
     print(f"Already processed: {len(processed_addresses)}")
     print(f"Will process: {len(addresses_to_process)}")
-    
+
     if not addresses_to_process:
         print("No new addresses to process")
         return []
-    
+
     # Progress tracking for Streamlit
     if show_progress:
         progress_bar = st.progress(0)
         status_text = st.empty()
-    
+
     processed_data = []
-    
+
     for i, address in enumerate(addresses_to_process):
         if show_progress:
             progress_bar.progress((i + 1) / len(addresses_to_process))
-            status_text.text(f"Processing address {i+1}/{len(addresses_to_process)}: {address[:10]}...")
-        
+            status_text.text(
+                f"Processing address {i+1}/{len(addresses_to_process)}: {address[:10]}..."
+            )
+
         try:
             # Fetch user portfolio
             portfolio_data = fetch_user_portfolio(address)
-            
+
             # Add to processed list
             add_processed_address(address)
-            
+
             # Store for return
-            processed_data.append({
-                "address": address,
-                "portfolio": portfolio_data
-            })
-            
+            processed_data.append({"address": address, "portfolio": portfolio_data})
+
             print(f"Successfully processed {address}")
-            
+
         except Exception as e:
             error_msg = str(e)
             print(f"Failed to process {address}: {error_msg}")
             add_failed_address(address, error_msg)
-        
+
         # Sleep to avoid rate limiting
         if i < len(addresses_to_process) - 1:  # Don't sleep after the last request
             time.sleep(API_SLEEP_SECONDS)
-    
+
     if show_progress:
         progress_bar.empty()
         status_text.empty()
         st.toast(f"Processed {len(processed_data)} user addresses!", icon="✅")
-    
+
     return processed_data
 
 
-def get_all_cached_user_data():
+def get_all_cached_user_data(st, is_debug=False):
     """Get all cached user data for analysis."""
     ensure_user_cache_dirs()
-    
+
     user_data = []
-    
+
     if not os.path.exists(USER_DATA_DIR):
         return user_data
-    
-    for filename in os.listdir(USER_DATA_DIR):
-        if filename.endswith('.json'):
+
+    total_steps = len(os.listdir(USER_DATA_DIR))
+    st.info(f"🔄 Reading {total_steps} cached users...")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    for i, filename in enumerate(os.listdir(USER_DATA_DIR)):
+        if filename.endswith(".json"):
             address = filename[:-5]  # Remove .json extension
             filepath = os.path.join(USER_DATA_DIR, filename)
-            
+
             try:
-                with open(filepath, 'r') as f:
+                with open(filepath, "r") as f:
                     portfolio_data = json.load(f)
-                    user_data.append({
-                        "address": address,
-                        "portfolio": portfolio_data
-                    })
+                    user_data.append({"address": address, "portfolio": portfolio_data})
             except Exception as e:
                 print(f"Error reading {filepath}: {e}")
-    
+            if is_debug and i >= 100:
+                print("Debug mode: stopping after 100 files")
+                break
+
+            progress_bar.progress((i + 1) / total_steps)
+            status_text.text(
+                f"Reading cached users {i+1}/{total_steps}: {address[:15]}..."
+            )
+
     return user_data
 
 
 def get_user_stats():
     """Get statistics about processed users."""
     ensure_user_cache_dirs()
-    
+
     # Count processed addresses
     processed_count = len(get_processed_addresses())
-    
+
     # Count failed addresses
     failed_count = 0
     if os.path.exists(FAILED_ADDRESSES_FILE):
         with open(FAILED_ADDRESSES_FILE, "r") as f:
             failed_count = len([line for line in f if line.strip()])
-    
+
     # Count cached data files
     cached_count = 0
     if os.path.exists(USER_DATA_DIR):
-        cached_count = len([f for f in os.listdir(USER_DATA_DIR) if f.endswith('.json')])
-    
+        cached_count = len(
+            [f for f in os.listdir(USER_DATA_DIR) if f.endswith(".json")]
+        )
+
     # Get total leaderboard size
     total_count = 0
     if os.path.exists(LEADERBOARD_CACHE_FILE):
         with open(LEADERBOARD_CACHE_FILE, "r") as f:
             leaderboard_data = json.load(f)
             total_count = len(extract_addresses_from_leaderboard(leaderboard_data))
-    
+
     return {
         "total_addresses": total_count,
         "processed_addresses": processed_count,
         "failed_addresses": failed_count,
-        "cached_data_files": cached_count
+        "cached_data_files": cached_count,
     }
+
+
+def calculate_days_since_start(portfolio_data):
+    """Calculate days since the user started trading."""
+    try:
+        # Look for allTime data
+        for period_data in portfolio_data:
+            if period_data[0] == "allTime":
+                account_history = period_data[1].get("accountValueHistory", [])
+                if account_history:
+                    # Get first timestamp
+                    first_timestamp = account_history[0][0]
+                    first_date = datetime.fromtimestamp(first_timestamp / 1000)
+                    days_since = (datetime.now() - first_date).days
+                    return max(1, days_since)  # At least 1 day
+        return 1  # Default to 1 day if no data
+    except:
+        return 1

@@ -125,6 +125,25 @@ def fetch_vault_details(leader, vault_address):
         )
 
 
+def get_all_vault_data(vaults):
+    """Get all cached user data for analysis."""
+    user_data = []
+
+    for vault in vaults:
+        while True:
+            try:
+                # Fetch vault details
+                details = fetch_vault_details(vault["Leader"], vault["Vault"])
+                break  # Exit the loop if successful
+            except Exception as e:
+                print(f"\nError fetching details for {vault['Name']}: {e}")
+                st.warning(f"Retrying to fetch details for {vault['Name']}...")
+                time.sleep(5)
+        user_data.append(details)
+
+    return user_data
+
+
 if __name__ == "__main__":
     vaults = update_all_cache_data()
     print(fetch_vault_details(vaults[0]["Leader"], vaults[0]["Vault"]))

@@ -5,59 +5,110 @@ import json
 import os
 import time
 from datetime import datetime, timedelta
-import warnings
 import pandas as pd
 import numpy as np
 import streamlit as st
 from pprint import pprint
 from typing import Dict, Tuple
+from enum import StrEnum
 
-from hyperliquid.vaults import fetch_vault_details, fetch_vaults_data
+from hyperliquid.vaults import (
+    fetch_vault_details,
+    fetch_vaults_data,
+    get_all_vault_data,
+)
+from hyperliquid.users import (
+    process_user_addresses,
+    get_all_cached_user_data,
+    calculate_days_since_start,
+    get_user_stats,
+    MAX_ADDRESSES_TO_PROCESS,
+)
 from metrics.sharpe_reliability import calculate_sharpe_reliability
 from metrics.metric_styler import MetricsStyler
 
-# 浮動小数点エラー（invalid, divide, over, under）も例外化
-# warnings.filterwarnings("error", category=RuntimeWarning)
-# np.seterr(all="raise")
+
+# ────────────────────────────────────────────────────────────────
+# Enumerations
+# ────────────────────────────────────────────────────────────────
+class DataType(StrEnum):
+    VAULT = "Vault"
+    USER = "User"
+
+
+class DataRange(StrEnum):
+    ALL_TIME = "allTime"
+    MONTH = "month"
+
+
+# ────────────────────────────────────────────────────────────────
+# Parameters
+# ────────────────────────────────────────────────────────────────
+
+data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
+data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
+is_debug = False  # Set to True for debugging mode
+MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
+
+# ────────────────────────────────────────────────────────────────
+
+if data_type == DataType.VAULT:
+    page_icon = "📊"
+    identifier_name = "Name"
+elif data_type == DataType.USER:
+    page_icon = "👤"
+    identifier_name = "Address"
 
 # Page config
 st.set_page_config(
-    page_title="HyperLiquid Vault Analyser", page_icon="📊", layout="wide"
+    page_title=f"HyperLiquid {data_type} Analyser", page_icon=page_icon, layout="wide"
 )
 
 # Title and description
-st.title("📊 HyperLiquid Vault Analyser")
-st.caption(
-    "🏦 Vault Analysis Mode - For user analysis, run: streamlit run user_analysis.py"
-)
+st.title(f"HyperLiquid {data_type} Analyser")
+st.caption(f"🏦 {data_type} Analysis Mode")
 
-# Update time display
-try:
-    with open("./cache/vaults_cache.json", "r") as f:
-        cache = json.load(f)
-        last_update = datetime.fromisoformat(cache["last_update"])
-        st.caption(f"🔄 Last update: {last_update.strftime('%Y-%m-%d %H:%M')} UTC")
-except (FileNotFoundError, KeyError, ValueError):
-    st.warning("⚠️ Cache not found. Data will be fetched fresh.")
-st.markdown("---")  # Add a separator line
+if data_type == DataType.VAULT:
+    # Update time display
+    try:
+        with open("./cache/vaults_cache.json", "r") as f:
+            cache = json.load(f)
+            last_update = datetime.fromisoformat(cache["last_update"])
+            st.caption(f"🔄 Last update: {last_update.strftime('%Y-%m-%d %H:%M')} UTC")
+    except (FileNotFoundError, KeyError, ValueError):
+        st.warning("⚠️ Cache not found. Data will be fetched fresh.")
+    st.markdown("---")  # Add a separator line
+
+    DATAFRAME_CACHE_FILE = "./cache/dataframe.pkl"
+
+elif data_type == DataType.USER:
+    user_stats = get_user_stats()
+
+    # Display statistics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Leaderboard", user_stats["total_addresses"])
+    with col2:
+        st.metric("Processed Users", user_stats["processed_addresses"])
+    with col3:
+        st.metric("Failed Addresses", user_stats["failed_addresses"])
+    with col4:
+        st.metric("Cached Data Files", user_stats["cached_data_files"])
+    st.markdown("---")
+    DATAFRAME_CACHE_FILE = "./user_cache/user_dataframe.pkl"
+
 
 # Layout for 3 columns
 
 
-DATAFRAME_CACHE_FILE = "./cache/dataframe.pkl"
-
-# data_range = "allTime"  # choose from ["allTime", "month"]
-data_range = "month"
-# data_range = "allTime"
-
-if data_range == "allTime":
+if data_range == DataRange.ALL_TIME:
     data_index = 3
     sampling_days = 7
     resample_rule = "W-MON"
     sharpe_prefix = "Weekly"
     separation_params = {"h": 8, "SR0": 0.1, "LT": 16}
 
-elif data_range == "month":
+elif data_range == DataRange.MONTH:
     data_index = 2
     sampling_days = 1
     resample_rule = "D"
@@ -67,77 +118,47 @@ else:
     raise ValueError(f"Invalid data_range: {data_range}. Choose 'allTime' or 'month'.")
 
 
-cache_used = False
-try:
-    final_df = pd.read_pickle(DATAFRAME_CACHE_FILE)
-    cache_used = True
-except (FileNotFoundError, KeyError, ValueError):
-    pass
-
-if not cache_used or True:
-
-    # Get vaults data (will use cache if valid)
-    vaults = fetch_vaults_data()
+def new_process_user_data_for_analysis(user_data_list):
 
     # Process vault details from cache
     progress_bar = st.progress(0)
     status_text = st.empty()
-    status_text.text("Processing vault details...")
-    total_steps = len(vaults)
     indicators = []
-    progress_i = 1
+    total_steps = len(user_data_list)
 
-    check_vault_name = None
-    # check_vault_name = "manicpt"
+    for i, user_data in enumerate(user_data_list):
 
-    s_return_list = []
+        progress_bar.progress((i + 1) / total_steps)
+        status_text.text(
+            f"Analyzing user {i+1}/{len(user_data_list)}: {user_data[identifier_name.lower()][:15]}..."
+        )
 
-    for vault in vaults:
-        if check_vault_name and vault["Name"] != check_vault_name:
-            continue
-        progress_bar.progress(progress_i / total_steps)
-        progress_i = progress_i + 1
-        status_text.text(f"Processing vault details ({progress_i}/{total_steps})...")
+        portfolio_data = user_data["portfolio"]
 
-        while True:
-            try:
-                # Fetch vault details
-                details = fetch_vault_details(vault["Leader"], vault["Vault"])
-                break  # Exit the loop if successful
-            except Exception as e:
-                print(f"\nError fetching details for {vault['Name']}: {e}")
-                st.warning(f"Retrying to fetch details for {vault['Name']}...")
-                time.sleep(5)
+        for period_data in portfolio_data:
+            if period_data[0] == data_range:
+                if data_type == DataType.VAULT:
+                    leader_eq = next(
+                        f for f in user_data["followers"] if f["user"] == "Leader"
+                    )["vaultEquity"]
+                    leader_eq = float(leader_eq)
+                    tvl = sum(float(f["vaultEquity"]) for f in user_data["followers"])
+                    if tvl == 0:
+                        continue
+                    leader_fraction = leader_eq / tvl  # 0.0–1.0
 
-        nb_followers = 0
-        if details and "followers" in details:
-            nb_followers = sum(
-                1 for f in details["followers"] if float(f["vaultEquity"]) >= 0.01
-            )
+                    check_an_identifier = None  # "HLP", ...
+                elif data_type == DataType.USER:
+                    check_an_identifier = None  # "0x1234...", ...
 
-        if details and "portfolio" in details:
-            data_chosen = details["portfolio"][data_index]
+                identifier = user_data[identifier_name.lower()]
 
-            if data_chosen[0] == data_range:
-                leader_eq = next(
-                    f for f in details["followers"] if f["user"] == "Leader"
-                )["vaultEquity"]
-                leader_eq = float(leader_eq)
-
-                tvl = sum(float(f["vaultEquity"]) for f in details["followers"])
-
-                # --- Leader シェア -------------------------------------------------
-                if tvl == 0:
+                # Check a vault or an address
+                if check_an_identifier and identifier != check_an_identifier:
                     continue
-                leader_fraction = leader_eq / tvl  # 0.0–1.0
 
-                # """
-                # 日次だと思ってたが、違う！！！！
-                # 別のデータソースから日次データを取得しなくては・・・
-                # """
-
-                data_source_pnlHistory = data_chosen[1].get("pnlHistory", [])
-                data_source_accountValueHistory = data_chosen[1].get(
+                data_source_pnlHistory = period_data[1].get("pnlHistory", [])
+                data_source_accountValueHistory = period_data[1].get(
                     "accountValueHistory", []
                 )
                 rebuilded_pnl = []
@@ -233,7 +254,7 @@ if not cache_used or True:
                 ret = pd.Series(
                     returns,
                     index=index_ts,
-                    name=vault["Name"],
+                    name=identifier,
                     dtype=float,
                 )
                 is_resample = True
@@ -264,7 +285,7 @@ if not cache_used or True:
                 cum_ret = np.exp(log_ret.cumsum())
                 dd = cum_ret / np.maximum.accumulate(cum_ret) - 1
 
-                if check_vault_name:
+                if check_an_identifier:
                     pnls = [float(value[1]) for value in data_source_pnlHistory]
                     df = (
                         pd.DataFrame(
@@ -295,7 +316,9 @@ if not cache_used or True:
                     print(df)
 
                 metrics = {
-                    "TVL Leader fraction %": round(leader_fraction * 100, 2),
+                    f"Total {identifier_name} Value": float(
+                        data_source_accountValueHistory[-1][1]
+                    ),
                     "Days from Return(Estimate)": len(ret) * sampling_days,
                     f"{sharpe_prefix} Sharpe Ratio": ret.mean() / ret.std(),
                     f"{sharpe_prefix} Sortino Ratio": (
@@ -320,9 +343,23 @@ if not cache_used or True:
                     * 100,
                     "Max DD %": dd.min() * (-1) * 100,
                     "Rekt": nb_rekt,
-                    "Act. Followers": nb_followers,
-                    "APR(30D) %": float(details["apr"]),
                 }
+                if data_type == DataType.VAULT:
+                    nb_followers = sum(
+                        1
+                        for f in user_data["followers"]
+                        if float(f["vaultEquity"]) >= 0.01
+                    )
+                    metrics.update(
+                        {
+                            "TVL Leader fraction %": round(leader_fraction * 100, 2),
+                            "Act. Followers": nb_followers,
+                            "APR(30D) %": float(user_data["apr"]),
+                        }
+                    )
+
+                elif data_type == DataType.USER:
+                    pass
 
                 # Calculate Sharpe reliability metrics
 
@@ -334,60 +371,165 @@ if not cache_used or True:
                 for key in reliability_metrics_keys:
                     metrics[key] = reliability_metrics[key]
                 # Unpacks the metrics dictionary
-                indicator_row = {"Name": vault["Name"], **metrics}
-                indicators.append(indicator_row)
+                metrics[identifier_name] = identifier
+                indicators.append(metrics)
 
     progress_bar.empty()
     status_text.empty()
-
-    st.toast("Vault details OK!", icon="✅")
-
-    # Step 4: Merge indicators with the main table
-    indicators_df = pd.DataFrame(indicators)
-
-    vaults_df = pd.DataFrame(vaults)
-    vaults_df["APR(7D) %"] = vaults_df["APR(7D) %"].astype(float)
-    del vaults_df["Leader"]
-
-    final_df = vaults_df.merge(indicators_df, on="Name", how="right")
-
-    final_df.to_pickle(DATAFRAME_CACHE_FILE)
+    return indicators
 
 
-# Filters
-# Add a column with clickable links
-final_df["Link"] = final_df["Vault"].apply(
-    lambda vault: f"https://app.hyperliquid.xyz/vaults/{vault}"
-)
+cache_used = False
+# try:
+#     final_df = pd.read_pickle(DATAFRAME_CACHE_FILE)
+#     cache_used = True
+#     st.info(f"📊 Using cached analysis data ({len(final_df)} users)")
+# except (FileNotFoundError, KeyError, ValueError):
+#     pass
 
-st.subheader(f"Vaults available ({len(final_df)})")
-filtered_df = final_df
+if not cache_used:
+    if data_type == DataType.VAULT:
+        vaults = fetch_vaults_data()
 
-# Filter by 'Name' (last filter, free text)
+        if is_debug:
+            vaults = vaults[:100]
+            st.title(f"[Debug mode!!!] only process {len(vaults)} {data_type}s")
+
+        user_data_list = get_all_vault_data(vaults)
+
+        st.info(f"🔄 Analyzing {len(user_data_list)} cached users...")
+        indicators = new_process_user_data_for_analysis(user_data_list)
+        indicators_df = pd.DataFrame(indicators)
+
+        vaults_df = pd.DataFrame(vaults)
+        vaults_df["APR(7D) %"] = vaults_df["APR(7D) %"].astype(float)
+        del vaults_df["Leader"]
+
+        final_df = vaults_df.merge(indicators_df, on="Name", how="right")
+
+        final_df["Link"] = final_df["Vault"].apply(
+            lambda vault: f"https://app.hyperliquid.xyz/vaults/{vault}"
+        )
+
+    elif data_type == DataType.USER:
+        # Check if we have any cached user data
+
+        user_data_list = get_all_cached_user_data(st, is_debug=is_debug)
+
+        if is_debug:
+            st.info(f"Debug mode! only process {len(user_data_list)} {data_type}s")
+
+        if not user_data_list:
+            st.warning("⚠️ No user data found. Please process some users first.")
+
+            # User input and button to process users
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                initial_users_to_process = st.number_input(
+                    "Initial users to process",
+                    min_value=1,
+                    max_value=20000,
+                    value=MAX_ADDRESSES_TO_PROCESS,
+                    step=1,
+                    help="Number of users to process from leaderboard",
+                    key="initial_users_input",
+                )
+            with col2:
+                if st.button(
+                    f"🔄 Process {initial_users_to_process} Users from Leaderboard"
+                ):
+                    with st.spinner("Processing users..."):
+                        process_user_addresses(
+                            max_addresses=initial_users_to_process, show_progress=True
+                        )
+                    st.rerun()
+
+            st.stop()
+
+        # Process the cached data
+        st.info(f"🔄 Processing {len(user_data_list)} cached users...")
+        indicators = new_process_user_data_for_analysis(user_data_list)
+
+        if not indicators:
+            st.error("❌ No valid user data could be processed.")
+            st.stop()
+
+        # Create DataFrame
+        final_df = pd.DataFrame(indicators)
+
+        # Add a column with clickable links to HyperLiquid
+        final_df["Link"] = final_df["Address"].apply(
+            lambda addr: f"https://app.hyperliquid.xyz/trade/{addr}"
+        )
+        # Display results
+        st.subheader(f"Users analysed ({len(final_df)})")
+
+        # Add process more users button with user input
+        col1, col2, col3 = st.columns([1, 1, 3])
+        with col1:
+            # User input for number of users to process
+            users_to_process = st.number_input(
+                "Users to process",
+                min_value=1,
+                max_value=20000,
+                value=MAX_ADDRESSES_TO_PROCESS,
+                step=1,
+                help="Number of users to process from leaderboard",
+            )
+        with col2:
+            if st.button(f"➕ Process {users_to_process} More Users"):
+                with st.spinner("Processing more users..."):
+                    new_data = process_user_addresses(
+                        max_addresses=users_to_process, show_progress=True
+                    )
+                    if new_data:
+                        # Clear cache to force reprocessing
+                        if os.path.exists(DATAFRAME_CACHE_FILE):
+                            os.remove(DATAFRAME_CACHE_FILE)
+                        st.rerun()
+
+
+# Save to cache
+final_df.to_pickle(DATAFRAME_CACHE_FILE)
+st.toast(f"{data_type} analysis data cached!", icon="✅")
+
+st.subheader(f"{data_type}s  ({len(final_df)})")
 st.markdown(
-    "<h3 style='text-align: center;'>Filter by Name</h3>", unsafe_allow_html=True
+    f"<h3 style='text-align: center;'>Filter by {identifier_name}</h3>",
+    unsafe_allow_html=True,
 )
-name_filter = st.text_input(
-    "Name Filter",
+
+# fileter by identifier
+filtered_df = final_df.copy()
+
+filter_ = st.text_input(
+    f"{identifier_name} Filter",
     "",
-    placeholder="Enter names separated by ',' to filter (e.g., toto,tata)...",
-    key="name_filter",
+    placeholder=f"Enter {identifier_name} separated by ',' to filter",
+    key=f"{identifier_name}_filter",
 )
 
 # Apply the filter
-if name_filter.strip():  # Check that the filter is not empty
-    name_list = [
-        name.strip() for name in name_filter.split(",")
-    ]  # List of names to search for
-    pattern = "|".join(name_list)  # Create a regex pattern with logical "or"
+if filter_.strip():  # Check that the filter is not empty
+    list_ = [item.strip() for item in filter_.split(",")]  # List of names to search for
+    pattern = "|".join(list_)  # Create a regex pattern with logical "or"
     filtered_df = filtered_df[
-        filtered_df["Name"].str.contains(pattern, case=False, na=False, regex=True)
+        filtered_df[identifier_name].str.contains(
+            pattern, case=False, na=False, regex=True
+        )
     ]
 
 
 # Organize sliders into rows of 3
 sliders = [
     # from "https://api-ui.hyperliquid.xyz/info"
+    {
+        "label": f"Min Total {identifier_name} Value",
+        "column": f"Total {identifier_name} Value",
+        "max": False,
+        "default": 100,
+        "step": 10,
+    },
     {
         "label": "Min Days from Return(Estimate)",
         "column": "Days from Return(Estimate)",
@@ -516,33 +658,42 @@ for i in range(0, len(sliders), 3):
     cols = st.columns(3)
     for slider, col in zip(sliders[i : i + 3], cols):
         column = slider["column"]
-        value = slider_with_label(
-            slider["label"],
-            col,
-            min_value=float(filtered_df[column].min()),
-            max_value=float(filtered_df[column].max()),
-            default_value=float(slider["default"]),
-            step=float(slider["step"]),
-            key=f"slider_{column}",
-        )
-        if not value == None:
-            if slider["max"]:
-                filtered_df = filtered_df[filtered_df[column] <= value]
-            else:
-                filtered_df = filtered_df[filtered_df[column] >= value]
-
-# Display the table
-st.title(f"Vaults filtered ({len(filtered_df)}) ")
+        if column in filtered_df.columns:
+            value = slider_with_label(
+                slider["label"],
+                col,
+                min_value=float(filtered_df[column].min()),
+                max_value=float(filtered_df[column].max()),
+                default_value=float(slider["default"]),
+                step=float(slider["step"]),
+                key=f"slider_{column}",
+            )
+            if value is not None:
+                if slider["max"]:
+                    filtered_df = filtered_df[filtered_df[column] <= value]
+                else:
+                    filtered_df = filtered_df[filtered_df[column] >= value]
 
 
 # Reset index for continuous ranking
+sort_col = f"{sharpe_prefix} Sharpe Ratio"
 filtered_df = filtered_df.reset_index(drop=True).sort_values(
-    by=f"{sharpe_prefix} Sharpe Ratio",
+    by=sort_col,
     ascending=False,
     # ignore_index=True,  # 連番に振り直すなら
 )
+orig_len = len(filtered_df)
+filtered_df = filtered_df.iloc[:MAX_ITEMS]
 
-"""p 値列と数値列を自動で条件付き書式にするユーティリティ"""
+
+# Display the table
+if orig_len > MAX_ITEMS:
+    st.title(
+        f"{data_type} filtered ({orig_len} -> Top {MAX_ITEMS} by '{sort_col}' are shown.) "
+    )
+else:
+    st.title(f"{data_type} filtered ({orig_len}) ")
+
 
 styler = MetricsStyler(p_th=0.05, zmax=3).generate_style(
     filtered_df, final_df, data_range
@@ -553,6 +704,8 @@ st.dataframe(
     use_container_width=True,
     height=(len(filtered_df) * 35) + 50,
     column_config={
-        "Link": st.column_config.LinkColumn("Vault Link", display_text="Vault Link")
+        "Link": st.column_config.LinkColumn(
+            f"{data_type} Link", display_text=f"{data_type} Link"
+        )
     },
 )

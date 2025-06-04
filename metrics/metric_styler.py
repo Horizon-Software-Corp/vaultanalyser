@@ -81,6 +81,7 @@ class MetricsStyler:
             inten = np.clip(abs(z) / self.zmax, 0.0, 1.0)
         else:
             inten = np.clip(abs(z) / (self.zmax * 0.05), 0.0, 1.0)
+
         base = self._RGB["green" if good else "red"]
 
         return self._blend(base, inten)
@@ -111,10 +112,8 @@ class MetricsStyler:
             if not is_numeric_dtype(df[col]):
                 continue  # 数値列以外は無視
 
-            col_lc = col.lower()  # 小文字キャッシュ
-
             # ---------- 1) rekt 列：0→緑, 1↑→赤 ----------
-            if "rekt" in col_lc:
+            if "Rekt" in col:
                 g_full = self._blend(self._RGB["green"], 1.0)  # 濃い緑
                 r_full = self._blend(self._RGB["red"], 1.0)  # 濃い赤
                 styler = styler.map(
@@ -126,11 +125,9 @@ class MetricsStyler:
                 continue
 
             # ── p 値列 ────────────────────────────────────
-            if col_lc.startswith("p_"):
+            if col.startswith("p_"):
                 sig_color = (
-                    "green"
-                    if "up" in col_lc
-                    else "red" if "down" in col_lc else "green"
+                    "green" if "up" in col else "red" if "down" in col else "green"
                 )
 
                 styler = styler.map(
@@ -142,24 +139,22 @@ class MetricsStyler:
             # ── z-score 列 ───────────────────────────────
 
             # ① “value” → log スケール
-            log_mode = "value" in col_lc
-            series_for_stats = (
-                np.log(df_all[col].where(df[col] > 0))  # 正の値だけ log
-                if log_mode
-                else df_all[col]
-            )
+            log_mode = "Value" in col
+            eps = 10e-10
+            scaling_func = lambda x: (np.log10(x + eps) if log_mode else x)
+            series_for_stats = df_all[col].apply(scaling_func)
 
             mu, sigma = self._robust_stats(series_for_stats)
 
             # ② “ratio / gain / apr” → µ を 0 に固定
-            if any(k in col_lc for k in ["annualized", "apr"]):
+            if any(k in col for k in ["Annualized", "APR"]):
                 # 典型的ドル金利
                 mu = 9.0
                 sigma = 100.0
-            elif any(k in col_lc for k in ["gain", "ratio"]):
+            elif any(k in col for k in ["Gain", "Ratio"]):
                 # 予言能力なし
                 mu = 0.0
-            elif any(k in col_lc for k in ["days"]):
+            elif any(k in col for k in ["Days"]):
                 # 予言能力なし
                 if data_range == "allTime":
                     mu = 365
@@ -167,24 +162,27 @@ class MetricsStyler:
                 elif data_range == "month":
                     mu = 20
                     sigma = 10
-            elif any(k in col_lc for k in ["fraction"]):
+            elif any(k in col for k in ["Fraction"]):
                 # 予言能力なし
                 mu = 30
                 sigma = 20
-            elif any(k in col_lc for k in ["dd"]):
+            elif any(k in col for k in ["DD"]):
                 mu = 10
                 sigma = 10
+            elif any(k in col for k in ["Value"]):
+                mu = scaling_func(100000)
+                sigma = 2
 
             if sigma == 0 or pd.isna(sigma):
                 continue  # 定数列はスキップ
 
             # ③ 指標の「良し悪し」判定
-            hib = not any(k in col_lc for k in ("dd", "drawdown", "rekt"))
+            hib = not any(k in col for k in ("DD", "Rekt"))
 
             # ④ セルごとのスタイル適用
             styler = styler.map(
-                lambda x, _m=mu, _s=sigma, _hib=hib, _log=log_mode: self._style_z(
-                    np.log(x) if _log and x > 0 else x, _m, _s, higher_is_better=_hib
+                lambda x, _m=mu, _s=sigma, _hib=hib, _log_mode=log_mode: self._style_z(
+                    np.log10(x + eps) if _log_mode else x, _m, _s, higher_is_better=_hib
                 ),
                 subset=[col],
             )
