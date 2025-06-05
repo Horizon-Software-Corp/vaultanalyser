@@ -426,7 +426,7 @@ if not cache_used:
         final_df = vaults_df.merge(indicators_df, on="Name", how="right")
 
         final_df["Link"] = final_df["Vault"].apply(
-            lambda vault: f"https://app.hyperliquid.xyz/vaults/{vault}"
+            lambda vault: f"https://hypurrscan.io/address/{vault}"
         )
 
     elif data_type == DataType.USER:
