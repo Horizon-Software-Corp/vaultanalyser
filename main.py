@@ -427,8 +427,8 @@ if not cache_used:
 
         final_df = vaults_df.merge(indicators_df, on="Name", how="right")
 
-        final_df["Link"] = final_df["Vault"].apply(
-            lambda vault: f"https://app.hyperliquid.xyz/vaults/{vault}"
+        final_df["Link"] = final_df["Address"].apply(
+            lambda addr: f"https://app.hyperliquid.xyz/trade/{addr}"
         )
 
     elif data_type == DataType.USER:
@@ -489,9 +489,10 @@ if not cache_used:
         print(df_rets)
 
         # Add a column with clickable links to HyperLiquid
-        final_df["Link"] = final_df["Address"].apply(
-            lambda addr: f"https://app.hyperliquid.xyz/trade/{addr}"
+        final_df["Link"] = final_df["Vault"].apply(
+            lambda vault: f"https://hypurrscan.io/address/{vault}"
         )
+
         # Display results
         st.subheader(f"Users analysed ({len(final_df)})")
 
