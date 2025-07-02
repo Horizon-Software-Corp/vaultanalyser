@@ -46,7 +46,7 @@ class DataRange(StrEnum):
 # Parameters
 # ────────────────────────────────────────────────────────────────
 
-data_type = DataType.VAULT  # Choose from [DataType.VAULT, DataType.USER]
+data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
 data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
@@ -427,7 +427,7 @@ if not cache_used:
 
         final_df = vaults_df.merge(indicators_df, on="Name", how="right")
 
-        final_df["Link"] = final_df["Address"].apply(
+        final_df["Link"] = final_df["Vault"].apply(
             lambda addr: f"https://app.hyperliquid.xyz/trade/{addr}"
         )
 
@@ -489,7 +489,7 @@ if not cache_used:
         print(df_rets)
 
         # Add a column with clickable links to HyperLiquid
-        final_df["Link"] = final_df["Vault"].apply(
+        final_df["Link"] = final_df["Address"].apply(
             lambda vault: f"https://hypurrscan.io/address/{vault}"
         )
 
