@@ -417,6 +417,8 @@ if not cache_used:
         st.info(f"🔄 Analyzing {len(user_data_list)} cached users...")
         indicators, rets = new_process_user_data_for_analysis(user_data_list)
         indicators_df = pd.DataFrame(indicators)
+        pd.set_option("display.max_rows", 1000)  # Show all rows
+        # print(pd.DataFrame(pd.DataFrame(rets).T).loc[:, 0])
         df_rets = pd.DataFrame(rets).T.dropna(axis=0, how="any")
 
         vaults_df = pd.DataFrame(vaults)
@@ -468,13 +470,23 @@ if not cache_used:
         st.info(f"🔄 Processing {len(user_data_list)} cached users...")
         indicators, rets = new_process_user_data_for_analysis(user_data_list)
 
+        # print(pd.DataFrame(pd.DataFrame(rets).T).loc[:, 0])
+
         if not indicators:
             st.error("❌ No valid user data could be processed.")
             st.stop()
 
         # Create DataFrame
         final_df = pd.DataFrame(indicators)
-        df_rets = pd.DataFrame(rets).T.dropna(axis=0, how="any")
+
+        df_rets = pd.DataFrame(rets).T
+        # for col in df_rets.columns:
+        #     s_col = df_rets[col]
+        #     if s_col.isna().any():
+        #         pass
+        #         # print(f"Warning: {col} has NaN values: {s_col.isna()}")
+        df_rets = df_rets.dropna(axis=0, how="any")
+        print(df_rets)
 
         # Add a column with clickable links to HyperLiquid
         final_df["Link"] = final_df["Address"].apply(
@@ -553,7 +565,7 @@ sliders = [
         "label": "Min Days from Return(Estimate)",
         "column": "Days from Return(Estimate)",
         "max": False,
-        "default": 90,
+        "default": 90 if data_range == DataRange.ALL_TIME else 30,
         "step": 1,
     },
     {
@@ -689,10 +701,11 @@ for i in range(0, len(sliders), 3):
                 key=f"slider_{column}",
             )
             if value is not None:
-                if slider["max"]:
-                    filtered_df = filtered_df[filtered_df[column] <= value]
-                else:
-                    filtered_df = filtered_df[filtered_df[column] >= value]
+                pass
+                # if slider["max"]:
+                #     filtered_df = filtered_df[filtered_df[column] <= value]
+                # else:
+                #     filtered_df = filtered_df[filtered_df[column] >= value]
 
 
 # -────────────────────────────────────────────────────────────
@@ -714,19 +727,22 @@ filtered_weight_df = filtered_df.sort_values(
     by=sort_col_weight, ascending=ascending
 )  # こっちはrowが資産名
 # それぞれのretごとに全ての時間のデータを使って計算したsharpe ratio
-print("\n")
-print(filtered_weight_df[sort_col_weight])
+# print("\n")
+# print(filtered_weight_df[sort_col_weight])
 
-idx_weights = filtered_weight_df.index[:N_ITEMS]  # indexはrowを撮ってくるので、資産名
+idx_weights = filtered_weight_df.index[:N_ITEMS]
 df_rets_weight = df_rets.loc[
     :, idx_weights
 ]  # df_retsは.Tしてあるので、colが資産名 -> 第二スライス
 
 # dropna(axis=0, how="any") したあとのデータを使って計算したsharpe ratio
 print("\n")
-print("期間を共有するようdropna")
+print("Sharpe Ratio of the top N items:")
 print(df_rets_weight.mean() / df_rets_weight.std())  # これでシャープレシオが計算できる
 print("\n")
+
+# print("dropna")
+# print(df_rets_weight)
 
 weights = optimize_portfolio(
     df_rets_weight, rf_rate=rf_rate, is_short=is_short, max_leverage=max_leverage

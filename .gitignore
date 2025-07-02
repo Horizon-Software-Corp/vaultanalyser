@@ -1,9 +1,14 @@
 .venv
+.vscode
 hyperliquid/__pycache__/
 metrics/__pycache__/
 venv
 vault_details_cache.json
-**/user_cache/user_data
+**/user_cache/
+**/cache/
+**/historical_cashe/
 leaderboard.json
 processed_addresses.txt
-user_dataframe.pkl
+userdata_example.json
+vaultdata_example.json
+
