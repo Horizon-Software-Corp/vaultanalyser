@@ -6,19 +6,20 @@ from datetime import datetime, timedelta
 import requests
 import streamlit as st
 
+
 # URLs for user data
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 USER_INFO_URL = "https://api.hyperliquid.xyz/info"
 
-USER_CACHE_DIR = "./user_cache/"
+USER_CACHE_DIR = "./cache/user/"
 LEADERBOARD_CACHE_FILE = USER_CACHE_DIR + "leaderboard.json"
-PROCESSED_ADDRESSES_FILE = USER_CACHE_DIR + "processed_addresses.txt"
+FETCHED_ADDRESSES_FILE = USER_CACHE_DIR + "fetched_addresses.txt"
 FAILED_ADDRESSES_FILE = USER_CACHE_DIR + "failed_addresses.txt"
 USER_DATA_DIR = USER_CACHE_DIR + "user_data/"
 
 # Configuration
-MAX_ADDRESSES_TO_PROCESS = 60
-API_SLEEP_SECONDS = 1
+MAX_ADDRESSES_TO_FETCH = 20000
+API_SLEEP_SECONDS = 0.5
 
 
 def ensure_user_cache_dirs():
@@ -55,18 +56,18 @@ def fetch_leaderboard():
         raise Exception(f"Failed to fetch leaderboard: {response.status_code}")
 
 
-def get_processed_addresses():
-    """Get list of already processed addresses."""
-    if not os.path.exists(PROCESSED_ADDRESSES_FILE):
+def get_fetched_addresses():
+    """Get list of already fetched addresses."""
+    if not os.path.exists(FETCHED_ADDRESSES_FILE):
         return set()
 
-    with open(PROCESSED_ADDRESSES_FILE, "r") as f:
+    with open(FETCHED_ADDRESSES_FILE, "r") as f:
         return set(line.strip() for line in f if line.strip())
 
 
-def add_processed_address(address):
-    """Add address to processed list."""
-    with open(PROCESSED_ADDRESSES_FILE, "a") as f:
+def add_fetched_address(address):
+    """Add address to fetched list."""
+    with open(FETCHED_ADDRESSES_FILE, "a") as f:
         f.write(f"{address}\n")
 
 
@@ -82,11 +83,12 @@ def fetch_user_portfolio(user_address):
 
     # Check if cache exists
     if os.path.exists(cache_file):
-        print(f"Cache found for {user_address}")
+        is_cache = True
+        # print(f"Cache found for {user_address}")
         with open(cache_file, "r") as f:
-            return json.load(f)
-
-    print(f"Downloading portfolio for {user_address}")
+            return json.load(f), is_cache
+    else:
+        is_cache = False
 
     # Fetch user portfolio
     payload = {"type": "portfolio", "user": user_address}
@@ -99,7 +101,7 @@ def fetch_user_portfolio(user_address):
         with open(cache_file, "w") as f:
             json.dump(portfolio_data, f, indent=2)
 
-        return portfolio_data
+        return portfolio_data, is_cache
     else:
         raise Exception(f"Failed to fetch portfolio: {response.status_code}")
 
@@ -124,31 +126,31 @@ def extract_addresses_from_leaderboard(leaderboard_data):
     return addresses
 
 
-def process_user_addresses(max_addresses=MAX_ADDRESSES_TO_PROCESS, show_progress=True):
-    """Process user addresses from leaderboard."""
+def fetch_user_addresses(max_addresses=MAX_ADDRESSES_TO_FETCH, show_progress=True):
+    """Fetch user addresses from leaderboard."""
     ensure_user_cache_dirs()
 
     # Get leaderboard
     leaderboard_data = fetch_leaderboard()
     all_addresses = extract_addresses_from_leaderboard(leaderboard_data)
 
-    # Get already processed addresses
-    processed_addresses = get_processed_addresses()
+    # Get already fetched addresses
+    fetched_addresses = get_fetched_addresses()
 
-    # Filter unprocessed addresses
-    unprocessed_addresses = [
-        addr for addr in all_addresses if addr not in processed_addresses
+    # Filter unfetched addresses
+    unfetched_addresses = [
+        addr for addr in all_addresses if addr not in fetched_addresses
     ]
 
     # Limit to max_addresses
-    addresses_to_process = unprocessed_addresses[:max_addresses]
+    addresses_to_fetch = unfetched_addresses[:max_addresses]
 
     print(f"Total addresses in leaderboard: {len(all_addresses)}")
-    print(f"Already processed: {len(processed_addresses)}")
-    print(f"Will process: {len(addresses_to_process)}")
+    print(f"Already fetched: {len(fetched_addresses)}")
+    print(f"Will fetch: {len(addresses_to_fetch)}")
 
-    if not addresses_to_process:
-        print("No new addresses to process")
+    if not addresses_to_fetch:
+        print("No new addresses to fetch")
         return []
 
     # Progress tracking for Streamlit
@@ -156,44 +158,53 @@ def process_user_addresses(max_addresses=MAX_ADDRESSES_TO_PROCESS, show_progress
         progress_bar = st.progress(0)
         status_text = st.empty()
 
-    processed_data = []
+    fetched_data = []
 
-    for i, address in enumerate(addresses_to_process):
+    for i, address in enumerate(addresses_to_fetch):
         if show_progress:
-            progress_bar.progress((i + 1) / len(addresses_to_process))
+            progress_bar.progress((i + 1) / len(addresses_to_fetch))
             status_text.text(
-                f"Processing address {i+1}/{len(addresses_to_process)}: {address[:10]}..."
+                f"Fetching address {i+1}/{len(addresses_to_fetch)}: {address[:10]}..."
             )
 
         try:
             # Fetch user portfolio
-            portfolio_data = fetch_user_portfolio(address)
+            portfolio_data, is_cache = fetch_user_portfolio(address)
 
-            # Add to processed list
-            add_processed_address(address)
+            if not is_cache:
+                print(f"Downloading portfolio for {address}")
+
+            # Add to fetched list
+            add_fetched_address(address)
 
             # Store for return
-            processed_data.append({"address": address, "portfolio": portfolio_data})
-
-            print(f"Successfully processed {address}")
+            fetched_data.append({"address": address, "portfolio": portfolio_data})
 
         except Exception as e:
             error_msg = str(e)
-            print(f"Failed to process {address}: {error_msg}")
+            print(f"Failed to fetch {address}: {error_msg}")
             add_failed_address(address, error_msg)
 
         # Sleep to avoid rate limiting
-        if i < len(addresses_to_process) - 1:  # Don't sleep after the last request
+        if (
+            not is_cache and i < len(addresses_to_fetch) - 1
+        ):  # Don't sleep after the last request
             time.sleep(API_SLEEP_SECONDS)
+
+        if show_progress and i >= 100 and i % 100 == 0:
+            print(
+                f"Fetching address {i+1}/{len(addresses_to_fetch)}: {address[:10]}..."
+            )
 
     if show_progress:
         progress_bar.empty()
         status_text.empty()
-        st.toast(f"Processed {len(processed_data)} user addresses!", icon="✅")
+        st.toast(f"Fetched {len(fetched_data)} user addresses!", icon="✅")
 
-    return processed_data
+    return fetched_data
 
 
+###### not necessary
 def get_all_cached_user_data(st, is_debug=False):
     """Get all cached user data for analysis."""
     ensure_user_cache_dirs()
@@ -232,11 +243,11 @@ def get_all_cached_user_data(st, is_debug=False):
 
 
 def get_user_stats():
-    """Get statistics about processed users."""
+    """Get statistics about fetched users."""
     ensure_user_cache_dirs()
 
-    # Count processed addresses
-    processed_count = len(get_processed_addresses())
+    # Count fetched addresses
+    fetched_count = len(get_fetched_addresses())
 
     # Count failed addresses
     failed_count = 0
@@ -260,7 +271,7 @@ def get_user_stats():
 
     return {
         "total_addresses": total_count,
-        "processed_addresses": processed_count,
+        "fetched_addresses": fetched_count,
         "failed_addresses": failed_count,
         "cached_data_files": cached_count,
     }

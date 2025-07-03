@@ -11,13 +11,13 @@ import time
 VAULTS_URL = "https://stats-data.hyperliquid.xyz/Mainnet/vaults"
 INFO_URL = "https://api-ui.hyperliquid.xyz/info"
 
-CACHE_DIR = "./cache/"
-
+CACHE_DIR = "./cache/vault/"
 CACHE_FILE = CACHE_DIR + "vaults_cache.json"
 DETAILS_CACHE_FILE = CACHE_DIR + "/vault_detail/#KEY#/vault_details_cache.json"
 
 
 CACHE_DAYS_VALIDITY = 7
+API_SLEEP_SECONDS = 0.5
 
 
 def update_all_cache_data(show_progress=True):
@@ -111,7 +111,7 @@ def fetch_vault_details(leader, vault_address):
     print("Vault DETAIL: Download used", cache_key)
 
     # Otherwise, make the request
-    time.sleep(1)
+    time.sleep(API_SLEEP_SECONDS)
     payload = {"type": "vaultDetails", "user": leader, "vaultAddress": vault_address}
     response = requests.post(INFO_URL, json=payload)
     if response.status_code == 200:

@@ -2,13 +2,11 @@
 .vscode
 hyperliquid/__pycache__/
 metrics/__pycache__/
-venv
 vault_details_cache.json
-**/user_cache/
-**/cache/
-**/historical_cashe/
+cache
+cache_history
 leaderboard.json
 processed_addresses.txt
 userdata_example.json
 vaultdata_example.json
-
+test.ipynb

@@ -4,13 +4,17 @@
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 import streamlit as st
 from pprint import pprint
 from typing import Dict, Tuple
 from enum import StrEnum
+import os
+import shutil
+from pathlib import Path
+
 
 from hyperliquid.vaults import (
     fetch_vault_details,
@@ -18,11 +22,11 @@ from hyperliquid.vaults import (
     get_all_vault_data,
 )
 from hyperliquid.users import (
-    process_user_addresses,
+    fetch_user_addresses,
     get_all_cached_user_data,
     calculate_days_since_start,
     get_user_stats,
-    MAX_ADDRESSES_TO_PROCESS,
+    MAX_ADDRESSES_TO_FETCH,
 )
 from metrics.sharpe_reliability import calculate_sharpe_reliability
 from metrics.metric_styler import MetricsStyler
@@ -45,12 +49,11 @@ class DataRange(StrEnum):
 # ────────────────────────────────────────────────────────────────
 # Parameters
 # ────────────────────────────────────────────────────────────────
-
 data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
 data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
-
+is_renew_data = False
 
 # ────────────────────────────────────────────────────────────────
 # Parameters for weight calculation
@@ -80,7 +83,66 @@ st.set_page_config(
 st.title(f"HyperLiquid {data_type} Analyser")
 st.caption(f"🏦 {data_type} Analysis Mode")
 
+
+def get_cache_date(CACHE_DATE_FILE):
+    """Get the last cache date from file."""
+    if not os.path.exists(CACHE_DATE_FILE):
+        # UTC date
+        cache_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with open(CACHE_DATE_FILE, "w") as f:
+            f.write(cache_date)
+    else:
+        with open(CACHE_DATE_FILE, "r") as f:
+            cache_date = f.read().strip()
+
+    return cache_date
+
+
+def copy_entire_dir_with_date(
+    src_dir: str | Path, dst_parent: str | Path, date
+) -> None:
+    """
+    src_dir の内容（ファイル・フォルダを含む全て）を
+    dst_parent/<basename_of_src>_YYYY-MM-DD へ丸ごとコピーします。
+
+    Parameters:
+      src_dir    コピー元ディレクトリのパス（文字列 or Path）
+      dst_parent コピー先の親ディレクトリのパス（文字列 or Path）
+    """
+    src = Path(src_dir)
+    dst_parent = Path(dst_parent)
+
+    if not src.exists() or not src.is_dir():
+        raise ValueError(f"src_dir が見つからないかディレクトリではありません: {src!r}")
+
+    # コピー先の親ディレクトリを作成
+    dst_parent.mkdir(parents=True, exist_ok=True)
+
+    # コピー先のフルパスを組み立て
+    dst = dst_parent / f"{src.name}_{date}"
+    print(dst)
+
+    # コピー実行（既存の dst があるとエラーになるので注意）
+    shutil.copytree(src, dst)
+    print(f"Copied: {src} → {dst}")
+    # コピー完了後に元フォルダを削除
+    shutil.rmtree(src)
+    print(f"Removed original directory: {src}")
+
+
+if is_renew_data:
+    data_type_dir = data_type.lower()
+    CACHE_DATE_FILE = f"./cache/{data_type_dir}/cache_date.txt"
+    cache_date = get_cache_date(CACHE_DATE_FILE)
+    SRC_DIR = f"./cache/{data_type_dir}/"
+    DST_DIR = f"./cache_history/{data_type_dir}/"
+
+    if not os.path.exists(DST_DIR + f"{data_type_dir}_{cache_date}"):
+        copy_entire_dir_with_date(SRC_DIR, DST_DIR, cache_date)
+
+
 if data_type == DataType.VAULT:
+
     # Update time display
     try:
         with open("./cache/vaults_cache.json", "r") as f:
@@ -91,7 +153,7 @@ if data_type == DataType.VAULT:
         st.warning("⚠️ Cache not found. Data will be fetched fresh.")
     st.markdown("---")  # Add a separator line
 
-    DATAFRAME_CACHE_FILE = "./cache/dataframe.pkl"
+    DATAFRAME_CACHE_FILE = "./cache/vault/dataframe.pkl"
 
 elif data_type == DataType.USER:
     user_stats = get_user_stats()
@@ -101,13 +163,13 @@ elif data_type == DataType.USER:
     with col1:
         st.metric("Total Leaderboard", user_stats["total_addresses"])
     with col2:
-        st.metric("Processed Users", user_stats["processed_addresses"])
+        st.metric("Fetched Users", user_stats["fetched_addresses"])
     with col3:
         st.metric("Failed Addresses", user_stats["failed_addresses"])
     with col4:
         st.metric("Cached Data Files", user_stats["cached_data_files"])
     st.markdown("---")
-    DATAFRAME_CACHE_FILE = "./user_cache/user_dataframe.pkl"
+    DATAFRAME_CACHE_FILE = "./cache/user/user_dataframe.pkl"
 
 
 # Layout for 3 columns
@@ -435,39 +497,41 @@ if not cache_used:
         # Check if we have any cached user data
 
         user_data_list = get_all_cached_user_data(st, is_debug=is_debug)
+        # user_data_list = fetch_user_addresses()
+        print(f"Number of cached users: {len(user_data_list)}")
 
         if is_debug:
             st.info(f"Debug mode! only process {len(user_data_list)} {data_type}s")
 
-        if not user_data_list:
-            st.warning("⚠️ No user data found. Please process some users first.")
+        if len(user_data_list) < 10000:
+            st.warning("⚠️ No user data found. Please download some user's data first.")
 
             # User input and button to process users
             col1, col2 = st.columns([1, 2])
             with col1:
-                initial_users_to_process = st.number_input(
-                    "Initial users to process",
+                initial_users_to_fetch = st.number_input(
+                    "Initial users to download",
                     min_value=1,
-                    max_value=20000,
-                    value=MAX_ADDRESSES_TO_PROCESS,
+                    max_value=MAX_ADDRESSES_TO_FETCH,
+                    value=20000,
                     step=1,
-                    help="Number of users to process from leaderboard",
+                    help="Number of users to download from leaderboard",
                     key="initial_users_input",
                 )
             with col2:
                 if st.button(
-                    f"🔄 Process {initial_users_to_process} Users from Leaderboard"
+                    f"🔄 Download {initial_users_to_fetch} Users from Leaderboard"
                 ):
-                    with st.spinner("Processing users..."):
-                        process_user_addresses(
-                            max_addresses=initial_users_to_process, show_progress=True
+                    with st.spinner("Downloading user data..."):
+                        fetch_user_addresses(
+                            max_addresses=initial_users_to_fetch, show_progress=True
                         )
                     st.rerun()
 
             st.stop()
 
         # Process the cached data
-        st.info(f"🔄 Processing {len(user_data_list)} cached users...")
+        st.info(f"🔄 Downloading {len(user_data_list)} cached users...")
         indicators, rets = new_process_user_data_for_analysis(user_data_list)
 
         # print(pd.DataFrame(pd.DataFrame(rets).T).loc[:, 0])
@@ -490,7 +554,7 @@ if not cache_used:
 
         # Add a column with clickable links to HyperLiquid
         final_df["Link"] = final_df["Address"].apply(
-            lambda vault: f"https://hypurrscan.io/address/{vault}"
+            lambda addr: f"https://hypurrscan.io/address/{addr}"
         )
 
         # Display results
@@ -500,19 +564,19 @@ if not cache_used:
         col1, col2, col3 = st.columns([1, 1, 3])
         with col1:
             # User input for number of users to process
-            users_to_process = st.number_input(
+            users_to_fetch = st.number_input(
                 "Users to process",
                 min_value=1,
                 max_value=20000,
-                value=MAX_ADDRESSES_TO_PROCESS,
+                value=MAX_ADDRESSES_TO_FETCH,
                 step=1,
                 help="Number of users to process from leaderboard",
             )
         with col2:
-            if st.button(f"➕ Process {users_to_process} More Users"):
+            if st.button(f"➕ Process {users_to_fetch} More Users"):
                 with st.spinner("Processing more users..."):
-                    new_data = process_user_addresses(
-                        max_addresses=users_to_process, show_progress=True
+                    new_data = fetch_user_addresses(
+                        max_addresses=users_to_fetch, show_progress=True
                     )
                     if new_data:
                         # Clear cache to force reprocessing
@@ -730,6 +794,9 @@ filtered_weight_df = filtered_df.sort_values(
 # それぞれのretごとに全ての時間のデータを使って計算したsharpe ratio
 # print("\n")
 # print(filtered_weight_df[sort_col_weight])
+
+# validatorを除く
+filtered_weight_df = filtered_weight_df[filtered_weight_df[sort_col_weight] < 2]
 
 idx_weights = filtered_weight_df.index[:N_ITEMS]
 df_rets_weight = df_rets.loc[
