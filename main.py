@@ -16,15 +16,13 @@ import shutil
 from pathlib import Path
 
 
-from hyperliquid.vaults import (
-    fetch_vault_details,
+from utils.vaults import (
     fetch_vaults_data,
     get_all_vault_data,
 )
-from hyperliquid.users import (
+from utils.users import (
     fetch_user_addresses,
     get_all_cached_user_data,
-    calculate_days_since_start,
     get_user_stats,
     MAX_ADDRESSES_TO_FETCH,
 )
@@ -49,7 +47,7 @@ class DataRange(StrEnum):
 # ────────────────────────────────────────────────────────────────
 # Parameters
 # ────────────────────────────────────────────────────────────────
-data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
+data_type = DataType.VAULT  # Choose from [DataType.VAULT, DataType.USER]
 data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found

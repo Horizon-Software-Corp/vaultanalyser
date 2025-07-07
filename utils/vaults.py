@@ -106,9 +106,10 @@ def fetch_vault_details(leader, vault_address):
             # print("Vault DETAIL: cache used", cache_key)
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        print("Vault DETAIL: No cache found")
+        # print("Vault DETAIL: No cache found")
+        pass
 
-    print("Vault DETAIL: Download used", cache_key)
+    print("Vault DETAIL: Download", cache_key)
 
     # Otherwise, make the request
     time.sleep(API_SLEEP_SECONDS)
