@@ -47,7 +47,7 @@ class DataRange(StrEnum):
 # ────────────────────────────────────────────────────────────────
 # Parameters
 # ────────────────────────────────────────────────────────────────
-data_type = DataType.VAULT  # Choose from [DataType.VAULT, DataType.USER]
+data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
 data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
@@ -418,6 +418,7 @@ def new_process_user_data_for_analysis(user_data_list):
                     "Max DD %": dd.min() * (-1) * 100,
                     "Rekt": nb_rekt,
                 }
+
                 if data_type == DataType.VAULT:
                     nb_followers = sum(
                         1
@@ -431,8 +432,9 @@ def new_process_user_data_for_analysis(user_data_list):
                             "APR(30D) %": float(user_data["apr"]),
                         }
                     )
-
                 elif data_type == DataType.USER:
+                    metrics["Filled Orders (30D)"] = user_data["fills"]
+                    metrics["Filled Orders (30D) 2"] = user_data["fills"]
                     pass
 
                 # Calculate Sharpe reliability metrics
@@ -448,6 +450,7 @@ def new_process_user_data_for_analysis(user_data_list):
                 metrics[identifier_name] = identifier
 
                 indicators.append(metrics)
+
                 rets.append(ret)
                 break
 
@@ -527,9 +530,11 @@ if not cache_used:
                     st.rerun()
 
             st.stop()
+            print("download completed")
+            user_data_list = get_all_cached_user_data(st, is_debug=is_debug)
 
         # Process the cached data
-        st.info(f"🔄 Downloading {len(user_data_list)} cached users...")
+        st.info(f"🔄 Processing {len(user_data_list)} cached users...")
         indicators, rets = new_process_user_data_for_analysis(user_data_list)
 
         # print(pd.DataFrame(pd.DataFrame(rets).T).loc[:, 0])
@@ -694,6 +699,20 @@ sliders = [
         "default": 0,
         "step": 1,
     },
+    {
+        "label": "Min Filled Orders (30D)",
+        "column": "Filled Orders (30D)",
+        "max": False,
+        "default": 10,
+        "step": 1,
+    },
+    {
+        "label": "Max Filled Orders (30D)",
+        "column": "Filled Orders (30D) 2",
+        "max": True,
+        "default": 2000,
+        "step": 1,
+    },
     # from "https://stats-data.hyperliquid.xyz/Mainnet/vaults"
     {
         "label": "Min TVL",
@@ -764,11 +783,11 @@ for i in range(0, len(sliders), 3):
                 key=f"slider_{column}",
             )
             if value is not None:
-                pass
-                # if slider["max"]:
-                #     filtered_df = filtered_df[filtered_df[column] <= value]
-                # else:
-                #     filtered_df = filtered_df[filtered_df[column] >= value]
+
+                if slider["max"]:
+                    filtered_df = filtered_df[filtered_df[column] <= value]
+                else:
+                    filtered_df = filtered_df[filtered_df[column] >= value]
 
 
 # -────────────────────────────────────────────────────────────
