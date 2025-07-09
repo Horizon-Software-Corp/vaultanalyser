@@ -200,10 +200,11 @@ def new_process_user_data_for_analysis(user_data_list):
     total_steps = len(user_data_list)
 
     for itr, user_data in enumerate(user_data_list):
+        identifier = user_data[identifier_name.lower()]
 
         progress_bar.progress((itr + 1) / total_steps)
         status_text.text(
-            f"Analyzing user {itr + 1}/{len(user_data_list)}: {user_data[identifier_name.lower()][:15]}..."
+            f"Analyzing user {itr + 1}/{len(user_data_list)}: {identifier[:15]}..."
         )
 
         portfolio_data = user_data["portfolio"]
@@ -223,8 +224,6 @@ def new_process_user_data_for_analysis(user_data_list):
                     check_an_identifier = None  # "HLP", ...
                 elif data_type == DataType.USER:
                     check_an_identifier = None  # "0x1234...", ...
-
-                identifier = user_data[identifier_name.lower()]
 
                 # Check a vault or an address
                 if check_an_identifier and identifier != check_an_identifier:
@@ -435,7 +434,20 @@ def new_process_user_data_for_analysis(user_data_list):
                 elif data_type == DataType.USER:
                     metrics["Filled Orders (30D)"] = user_data["fills"]
                     metrics["Filled Orders (30D) 2"] = user_data["fills"]
-                    pass
+
+                    metrics["Perp Taker Fee (bips)"] = (
+                        float(user_data["fees"]["userAddRate"]) * 10000
+                    )
+                    metrics["Spot Taker Fee (bips)"] = (
+                        float(user_data["fees"]["userSpotAddRate"]) * 10000
+                    )
+                    metrics["Maker Volume (14D)"] = float(
+                        user_data["fees"]["dailyUserVlm_14D"]["userAdd"]
+                    )
+
+                    metrics["Taker Volume (14D)"] = float(
+                        user_data["fees"]["dailyUserVlm_14D"]["userCross"]
+                    )
 
                 # Calculate Sharpe reliability metrics
 
@@ -477,7 +489,7 @@ if not cache_used:
 
         user_data_list = get_all_vault_data(vaults)
 
-        st.info(f"🔄 Analyzing {len(user_data_list)} cached users...")
+        st.info(f"🔄 Analyzing {len(user_data_list)} cached vaults...")
         indicators, rets = new_process_user_data_for_analysis(user_data_list)
         indicators_df = pd.DataFrame(indicators)
         pd.set_option("display.max_rows", 1000)  # Show all rows
@@ -497,14 +509,17 @@ if not cache_used:
     elif data_type == DataType.USER:
         # Check if we have any cached user data
 
-        user_data_list = get_all_cached_user_data(st, is_debug=is_debug)
+        user_data_list, failed_data_list = get_all_cached_user_data(
+            st, is_debug=is_debug
+        )
         # user_data_list = fetch_user_addresses()
         print(f"Number of cached users: {len(user_data_list)}")
+        print(f"Number of failed users: {len(failed_data_list)}")
 
         if is_debug:
             st.info(f"Debug mode! only process {len(user_data_list)} {data_type}s")
 
-        if len(user_data_list) < 10000:
+        if len(user_data_list) < 10000 and len(failed_data_list) > 0:
             st.warning("⚠️ No user data found. Please download some user's data first.")
 
             # User input and button to process users
@@ -525,13 +540,15 @@ if not cache_used:
                 ):
                     with st.spinner("Downloading user data..."):
                         fetch_user_addresses(
-                            max_addresses=initial_users_to_fetch, show_progress=True
+                            max_addresses=initial_users_to_fetch,
+                            addresses_force_fetch=failed_data_list,
+                            show_progress=True,
                         )
                     st.rerun()
 
             st.stop()
             print("download completed")
-            user_data_list = get_all_cached_user_data(st, is_debug=is_debug)
+            user_data_list, _ = get_all_cached_user_data(st, is_debug=is_debug)
 
         # Process the cached data
         st.info(f"🔄 Processing {len(user_data_list)} cached users...")
@@ -712,6 +729,34 @@ sliders = [
         "max": True,
         "default": 2000,
         "step": 1,
+    },
+    {
+        "label": "Min Perp Taker Fee (bips)",
+        "column": "Perp Taker Fee (bips)",
+        "max": False,
+        "default": 0,
+        "step": 0.0001,
+    },
+    {
+        "label": "Min Spot Taker Fee (bips)",
+        "column": "Spot Taker Fee (bips)",
+        "max": False,
+        "default": 0,
+        "step": 0.0001,
+    },
+    {
+        "label": "Min Maker Volume (14D)",
+        "column": "Maker Volume (14D)",
+        "max": False,
+        "default": 0,
+        "step": 100,
+    },
+    {
+        "label": "Min Taker Volume (14D)",
+        "column": "Taker Volume (14D)",
+        "max": False,
+        "default": 0,
+        "step": 100,
     },
     # from "https://stats-data.hyperliquid.xyz/Mainnet/vaults"
     {

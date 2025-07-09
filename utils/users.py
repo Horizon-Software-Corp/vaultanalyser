@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -9,7 +10,7 @@ import streamlit as st
 
 from hyperliquid.info import Info
 from pprint import pprint
-
+import traceback
 
 # URLs for user data
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
@@ -21,11 +22,11 @@ LEADERBOARD_CACHE_FILE = USER_CACHE_DIR + "leaderboard.json"
 FETCHED_ADDRESSES_FILE = USER_CACHE_DIR + "fetched_addresses.txt"
 FAILED_ADDRESSES_FILE = USER_CACHE_DIR + "failed_addresses.txt"
 USER_DATA_DIR = USER_CACHE_DIR + "user_data/"
-FILLS_FILE = USER_CACHE_DIR + f"fills.json"
+
 
 # Configuration
 MAX_ADDRESSES_TO_FETCH = 20000
-API_SLEEP_SECONDS = 0.3
+API_SLEEP_SECONDS = 0.4
 
 
 def ensure_user_cache_dirs():
@@ -83,32 +84,143 @@ def add_failed_address(address, error):
         f.write(f"{address}: {error}\n")
 
 
-def fetch_user_portfolio(user_address):
+def load_user_data(address):
     """Fetch user portfolio data with caching."""
-    cache_file = os.path.join(USER_DATA_DIR, f"{user_address}.json")
-
+    cache_file = os.path.join(USER_DATA_DIR, f"{address}.json")
     # Check if cache exists
     if os.path.exists(cache_file):
         # print(f"Cache found for {user_address}")
         with open(cache_file, "r") as f:
-            return json.load(f)
+            info = json.load(f)
+    else:
+        info = {}
+    return info
+
+
+def save_user_data(address, data):
+    """Save user portfolio data to cache."""
+    cache_file = os.path.join(USER_DATA_DIR, f"{address}.json")
+    with open(cache_file, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"User data for {address} saved to cache.")
+
+
+def add_address(address):
+    data = load_user_data(address)
+    if "address" in data:
+        pass
+    else:
+        data["address"] = address
+        save_user_data(address, data)
+    return
+
+
+def fetch_user_portfolio(address):
+    data = load_user_data(address)
+    if type(data) is list:
+        save_user_data(address, {"portfolio": data})
+        return
+    elif "portfolio" in data:
+        if "portfolio" in data["portfolio"]:
+            print("nested portfolio found, saving directly")
+            # すでにポートフォリオがある場合は何もしない
+            save_user_data(address, data["portfolio"])
+        return
+    elif "portofolio" in data:
+        print("typo error: 'portofolio' should be 'portfolio'")
+        data["portfolio"] = data["portofolio"]
+        del data["portofolio"]
+
+        save_user_data(address, data)
+        return
 
     # Fetch user portfolio
-    payload = {"type": "portfolio", "user": user_address}
+    payload = {"type": "portfolio", "user": address}
     response = requests.post(USER_INFO_URL, json=payload)
 
     if response.status_code == 200:
         portfolio_data = response.json()
 
         # Save to cache
-        with open(cache_file, "w") as f:
-            json.dump(portfolio_data, f, indent=2)
-
+        data["portfolio"] = portfolio_data
+        save_user_data(address, data)
         time.sleep(API_SLEEP_SECONDS)
-
-        return portfolio_data
+        return
     else:
         raise Exception(f"Failed to fetch portfolio: {response.status_code}")
+
+
+def fetch_fills(address: str, days: int = 30) -> int:
+    data = load_user_data(address)
+
+    if "fills" in data:
+        # すでにフィルがある場合は何もしない
+        return
+
+    # 期間の下限をエポックミリ秒で計算
+    now_ms = int(time.time() * 1_000)
+    since_ms = int(
+        (datetime.now(tz=timezone.utc) - timedelta(days=days)).timestamp() * 1_000
+    )
+    res = info.user_fills(address)
+    fill_num = sum(since_ms <= fill["time"] <= now_ms for fill in res)
+
+    data["fills"] = fill_num
+    save_user_data(address, data)
+    time.sleep(API_SLEEP_SECONDS)
+    # フィルタしてカウント
+    return
+
+
+def fetch_fees(address: str) -> dict:
+    data = load_user_data(address)
+    if "fees" in data:
+        # すでにフィーがある場合は何もしない
+        return
+
+    # 期間の下限をエポックミリ秒で計算
+    res = info.user_fees(address)
+    USER_KEYS = {
+        "activeReferralDiscount",
+        "activeStakingDiscount",
+        "feeTrialReward",
+        "nextTrialAvailableTimestamp",
+        "stakingLink",
+        "trial",
+        "userAddRate",
+        "userCrossRate",
+        "userSpotAddRate",
+        "userSpotCrossRate",
+    }
+
+    fees = {k: res[k] for k in USER_KEYS if k in res}
+
+    # 返り値も他フィールドに合わせて文字列化
+    # -------- dailyUserVlm を dict に畳み込む -----------------------
+    total_exchange = Decimal("0")
+    total_add = Decimal("0")
+    total_cross = Decimal("0")
+
+    for day in res.get("dailyUserVlm", []):
+        total_exchange += Decimal(day["exchange"])
+        total_add += Decimal(day["userAdd"])
+        total_cross += Decimal(day["userCross"])
+
+    fees["dailyUserVlm_14D"] = {
+        "exchange": float(total_exchange),
+        "userAdd": float(total_add),
+        "userCross": float(total_cross),
+    }
+
+    data["fees"] = fees
+    save_user_data(address, data)
+    time.sleep(API_SLEEP_SECONDS)
+    # フィルタしてカウント
+    return
+
+
+#########################################
+#########################################
 
 
 def extract_addresses_from_leaderboard(leaderboard_data):
@@ -131,7 +243,9 @@ def extract_addresses_from_leaderboard(leaderboard_data):
     return addresses
 
 
-def fetch_user_addresses(max_addresses=MAX_ADDRESSES_TO_FETCH, show_progress=True):
+def fetch_user_addresses(
+    max_addresses=MAX_ADDRESSES_TO_FETCH, addresses_force_fetch=[], show_progress=True
+):
     """Fetch user addresses from leaderboard."""
     ensure_user_cache_dirs()
 
@@ -144,7 +258,9 @@ def fetch_user_addresses(max_addresses=MAX_ADDRESSES_TO_FETCH, show_progress=Tru
 
     # Filter unfetched addresses
     unfetched_addresses = [
-        addr for addr in all_addresses if addr not in fetched_addresses
+        addr
+        for addr in all_addresses
+        if (addr not in fetched_addresses) or (addr in addresses_force_fetch)
     ]
 
     # Limit to max_addresses
@@ -173,26 +289,23 @@ def fetch_user_addresses(max_addresses=MAX_ADDRESSES_TO_FETCH, show_progress=Tru
             )
 
         try:
-            # Fetch user portfolio
-            portfolio_data = fetch_user_portfolio(address)
 
-            # Add to fetched list
+            # Fetch info for the user
+            fetch_user_portfolio(address)
+            fetch_fills(address)
+            fetch_fees(address)
+            add_address(address)
+
+            data = load_user_data(address)
+
             add_fetched_address(address)
-
-            fill_num = count_fills(address, days=30)
-
             # Store for return
-            fetched_data.append(
-                {
-                    "address": address,
-                    "portfolio": portfolio_data,
-                    f"fills": fill_num,
-                }
-            )
+            fetched_data.append(data)
 
         except Exception as e:
             error_msg = str(e)
             print(f"Failed to fetch {address}: {error_msg}")
+            # traceback.print_exc()
             add_failed_address(address, error_msg)
 
         if show_progress and i >= 100 and i % 100 == 0:
@@ -223,30 +336,31 @@ def get_all_cached_user_data(st, is_debug=False):
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    with open(FILLS_FILE, "r") as f:
-        fills = json.load(f)
+    failed_data = []
 
     for i, filename in enumerate(os.listdir(USER_DATA_DIR)):
         if filename.endswith(".json"):
             address = filename[:-5]  # Remove .json extension
-            filepath = os.path.join(USER_DATA_DIR, filename)
 
-            if address not in fills:
-                # print(f"Address {address} not found in fills data.")
+            data = load_user_data(address)  # Ensure data is loaded
+
+            # if not data:
+            #     print(f"No data found for {address}")
+
+            if type(data) is dict:
+                keys = ["address", "portfolio", "fees", "fills"]
+                is_all_key = all(key in data for key in keys)
+                if not is_all_key:
+                    print(f"Missing keys in {address}: {data.keys()}")
+                    failed_data.append(data)
+                    continue
+            else:
+                failed_data.append(data)
+                print(f"Invalid data format for {address}: {type(data)}")
                 continue
 
-            try:
-                with open(filepath, "r") as f:
-                    portfolio_data = json.load(f)
-                    user_data.append(
-                        {
-                            "address": address,
-                            "portfolio": portfolio_data,
-                            "fills": fills[address],
-                        }
-                    )
-            except Exception as e:
-                print(f"Error reading {filepath}: {e}")
+            user_data.append(data)
+
             if is_debug and i >= 100:
                 print("Debug mode: stopping after 100 files")
                 break
@@ -256,7 +370,7 @@ def get_all_cached_user_data(st, is_debug=False):
                 f"Reading cached users {i+1}/{total_steps}: {address[:15]}..."
             )
 
-    return user_data
+    return user_data, failed_data
 
 
 def get_user_stats():
@@ -292,74 +406,3 @@ def get_user_stats():
         "failed_addresses": failed_count,
         "cached_data_files": cached_count,
     }
-
-
-def calculate_days_since_start(portfolio_data):
-    """Calculate days since the user started trading."""
-    try:
-        # Look for allTime data
-        for period_data in portfolio_data:
-            if period_data[0] == "allTime":
-                account_history = period_data[1].get("accountValueHistory", [])
-                if account_history:
-                    # Get first timestamp
-                    first_timestamp = account_history[0][0]
-                    first_date = datetime.fromtimestamp(first_timestamp / 1000)
-                    days_since = (datetime.now() - first_date).days
-                    return max(1, days_since)  # At least 1 day
-        return 1  # Default to 1 day if no data
-    except:
-        return 1
-
-
-def count_fills(
-    address: str,
-    days: int = 30,
-    *,
-    timeout: int = 10,
-) -> int:
-    """
-    指定アドレスが直近 `days` 日間に行った Place Order アクション数を返す。
-
-    Parameters
-    ----------
-    address : str
-        0x で始まる 42 文字の Hyperliquid アカウントアドレス
-    days : int, optional
-        何日前までさかのぼるか（既定は 30 日）
-    testnet : bool, optional
-        True の場合はテストネット API を利用
-    timeout : int, optional
-        HTTP タイムアウト秒
-
-    Returns
-    -------
-    int
-        Place Order 件数
-    """
-
-    if os.path.exists(FILLS_FILE):
-        # キャッシュがあれば読み込む
-
-        with open(FILLS_FILE, "r") as f:
-            fills = json.load(f)
-            if address in fills:
-                return fills[address]
-    else:
-        fills = {}
-
-    # 期間の下限をエポックミリ秒で計算
-    now_ms = int(time.time() * 1_000)
-    since_ms = int(
-        (datetime.now(tz=timezone.utc) - timedelta(days=days)).timestamp() * 1_000
-    )
-
-    data = info.user_fills(address)
-    fill_num = sum(since_ms <= fill["time"] <= now_ms for fill in data)
-    fills[address] = fill_num
-
-    with open(FILLS_FILE, "w") as f:
-        json.dump(fills, f, indent=2)
-    time.sleep(API_SLEEP_SECONDS)
-    # フィルタしてカウント
-    return fill_num
