@@ -52,11 +52,12 @@ data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH
 is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
 is_renew_data = False
+is_cache_used = False
 
 # ────────────────────────────────────────────────────────────────
 # Parameters for weight calculation
 # ────────────────────────────────────────────────────────────────
-N_ITEMS = 5
+N_ITEMS = 10
 sort_col_weight = "Sharpe Ratio"  # Column to sort by
 rf_rate = 0.09  # Annualized risk-free rate
 is_short = False  # BTC, ETHなどの価格の系列を入れ、そこだけshort許可してもいいかも
@@ -151,8 +152,6 @@ if data_type == DataType.VAULT:
         st.warning("⚠️ Cache not found. Data will be fetched fresh.")
     st.markdown("---")  # Add a separator line
 
-    DATAFRAME_CACHE_FILE = "./cache/vault/dataframe.pkl"
-
 elif data_type == DataType.USER:
     user_stats = get_user_stats()
 
@@ -167,12 +166,12 @@ elif data_type == DataType.USER:
     with col4:
         st.metric("Cached Data Files", user_stats["cached_data_files"])
     st.markdown("---")
-    DATAFRAME_CACHE_FILE = "./cache/user/user_dataframe.pkl"
 
+
+DATAFRAME_CACHE_FILE = f"./cache/{data_type.lower()}/dataframe.pkl"
+DATAFRAME_RETS_CACHE_FILE = f"./cache/{data_type.lower()}/returns.pkl"
 
 # Layout for 3 columns
-
-
 if data_range == DataRange.ALL_TIME:
     data_index = 3
     sampling_days = 7
@@ -471,15 +470,17 @@ def new_process_user_data_for_analysis(user_data_list):
     return indicators, rets
 
 
-cache_used = False
-# try:
-#     final_df = pd.read_pickle(DATAFRAME_CACHE_FILE)
-#     cache_used = True
-#     st.info(f"📊 Using cached analysis data ({len(final_df)} users)")
-# except (FileNotFoundError, KeyError, ValueError):
-#     pass
+if is_cache_used or "init_done" in st.session_state:
+    final_df = pd.read_pickle(DATAFRAME_CACHE_FILE)
+    df_rets = pd.read_pickle(DATAFRAME_RETS_CACHE_FILE)
+    cache_used = True
+    st.info(f"📊 Using cached analysis data ({len(final_df)} users)")
 
-if not cache_used:
+else:
+    if os.path.exists(DATAFRAME_CACHE_FILE):
+        os.remove(DATAFRAME_CACHE_FILE)  # ← ここで一度だけキャッシュを削除
+    st.session_state["init_done"] = True  # 以後の再実行では削除しない
+
     if data_type == DataType.VAULT:
         vaults = fetch_vaults_data()
 
@@ -604,11 +605,13 @@ if not cache_used:
                             os.remove(DATAFRAME_CACHE_FILE)
                         st.rerun()
 
+    # Save to cache
+    final_df.to_pickle(DATAFRAME_CACHE_FILE)
+    df_rets.to_pickle(DATAFRAME_RETS_CACHE_FILE)
+    st.toast(f"{data_type} analysis data cached!", icon="✅")
 
-# Save to cache
-final_df.to_pickle(DATAFRAME_CACHE_FILE)
-st.toast(f"{data_type} analysis data cached!", icon="✅")
 
+####################################
 st.subheader(f"{data_type}s  ({len(final_df)})")
 st.markdown(
     f"<h3 style='text-align: center;'>Filter by {identifier_name}</h3>",
@@ -720,7 +723,7 @@ sliders = [
         "label": "Min Filled Orders (30D)",
         "column": "Filled Orders (30D)",
         "max": False,
-        "default": 10,
+        "default": 60,
         "step": 1,
     },
     {
