@@ -51,8 +51,8 @@ data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
 data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
-is_renew_data = False
 is_cache_used = False
+is_renew_data = True
 
 # ────────────────────────────────────────────────────────────────
 # Parameters for weight calculation
@@ -470,7 +470,10 @@ def new_process_user_data_for_analysis(user_data_list):
     return indicators, rets
 
 
-if is_cache_used or "init_done" in st.session_state:
+print(st.session_state)
+if (is_cache_used or "init_done" in st.session_state) and os.path.exists(
+    DATAFRAME_CACHE_FILE
+):
     final_df = pd.read_pickle(DATAFRAME_CACHE_FILE)
     df_rets = pd.read_pickle(DATAFRAME_RETS_CACHE_FILE)
     cache_used = True
@@ -520,7 +523,7 @@ else:
         if is_debug:
             st.info(f"Debug mode! only process {len(user_data_list)} {data_type}s")
 
-        if len(user_data_list) < 10000 and len(failed_data_list) > 0:
+        if len(user_data_list) < 10000 or len(failed_data_list) > 0:
             st.warning("⚠️ No user data found. Please download some user's data first.")
 
             # User input and button to process users

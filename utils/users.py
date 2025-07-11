@@ -97,12 +97,12 @@ def load_user_data(address):
     return info
 
 
-def save_user_data(address, data):
+def save_user_data(address, data, data_type=None):
     """Save user portfolio data to cache."""
     cache_file = os.path.join(USER_DATA_DIR, f"{address}.json")
     with open(cache_file, "w") as f:
         json.dump(data, f, indent=2)
-    print(f"User data for {address} saved to cache.")
+    print(f"User data: {data_type} for {address} saved to cache.")
 
 
 def add_address(address):
@@ -111,28 +111,28 @@ def add_address(address):
         pass
     else:
         data["address"] = address
-        save_user_data(address, data)
+        save_user_data(address, data, "address")
     return
 
 
 def fetch_user_portfolio(address):
     data = load_user_data(address)
     if type(data) is list:
-        save_user_data(address, {"portfolio": data})
+        save_user_data(address, {"portfolio": data}, "portfolio")
         return
     elif "portfolio" in data:
-        if "portfolio" in data["portfolio"]:
-            print("nested portfolio found, saving directly")
-            # すでにポートフォリオがある場合は何もしない
-            save_user_data(address, data["portfolio"])
+        # if "portfolio" in data["portfolio"]:
+        #     print("nested portfolio found, saving directly")
+        #     # すでにポートフォリオがある場合は何もしない
+        #     save_user_data(address, data["portfolio"], "portfolio")
         return
-    elif "portofolio" in data:
-        print("typo error: 'portofolio' should be 'portfolio'")
-        data["portfolio"] = data["portofolio"]
-        del data["portofolio"]
+    # elif "portofolio" in data:
+    #     print("typo error: 'portofolio' should be 'portfolio'")
+    #     data["portfolio"] = data["portofolio"]
+    #     del data["portofolio"]
 
-        save_user_data(address, data)
-        return
+    #     save_user_data(address, data, "portfolio")
+    #     return
 
     # Fetch user portfolio
     payload = {"type": "portfolio", "user": address}
@@ -143,7 +143,7 @@ def fetch_user_portfolio(address):
 
         # Save to cache
         data["portfolio"] = portfolio_data
-        save_user_data(address, data)
+        save_user_data(address, data, "portfolio")
         time.sleep(API_SLEEP_SECONDS)
         return
     else:
@@ -166,7 +166,7 @@ def fetch_fills(address: str, days: int = 30) -> int:
     fill_num = sum(since_ms <= fill["time"] <= now_ms for fill in res)
 
     data["fills"] = fill_num
-    save_user_data(address, data)
+    save_user_data(address, data, "fills")
     time.sleep(API_SLEEP_SECONDS)
     # フィルタしてカウント
     return
@@ -213,9 +213,52 @@ def fetch_fees(address: str) -> dict:
     }
 
     data["fees"] = fees
-    save_user_data(address, data)
+    save_user_data(address, data, "fees")
     time.sleep(API_SLEEP_SECONDS)
     # フィルタしてカウント
+    return
+
+
+def fetch_state(address: str, state_type: str = "perp") -> None:
+    """
+    指定アドレスの 'perp' または 'spot' 状態を取得し、
+    data["state"][state_type] に保存する。
+
+    Parameters
+    ----------
+    address : str
+        Hyperliquid L1 アドレス (0x...)
+    state_type : {'perp', 'spot'}
+        取得対象のステート種類
+        - 'perp' : clearinghouse_state
+        - 'spot' : spot_user_state
+    """
+
+    data = load_user_data(address)  # 既存ファイル読み込み
+
+    # 最初の呼び出しで state 用 dict を用意
+    if "state" not in data:
+        data["state"] = {}
+
+    # すでに同種 state が保存済みなら何もしない
+    if state_type in data["state"]:
+        return
+
+    # ------------------- API 呼び分け -------------------
+    if state_type == "perp":
+        state = info.user_state(address)
+    elif state_type == "spot":
+        state = info.spot_user_state(address)  # SDK >=0.2.3
+    else:
+        raise ValueError(f"unsupported state_type: {state_type}")
+    # ---------------------------------------------------
+
+    # 保存してディスクへ
+    data["state"][state_type] = state
+    save_user_data(address, data, f"state_{state_type}")
+
+    # レート制限を避けるためスリープ
+    time.sleep(API_SLEEP_SECONDS)
     return
 
 
@@ -294,6 +337,8 @@ def fetch_user_addresses(
             fetch_user_portfolio(address)
             fetch_fills(address)
             fetch_fees(address)
+            fetch_state(address, "perp")
+            fetch_state(address, "spot")
             add_address(address)
 
             data = load_user_data(address)
@@ -321,7 +366,6 @@ def fetch_user_addresses(
     return fetched_data
 
 
-###### not necessary
 def get_all_cached_user_data(st, is_debug=False):
     """Get all cached user data for analysis."""
     ensure_user_cache_dirs()
@@ -348,7 +392,7 @@ def get_all_cached_user_data(st, is_debug=False):
             #     print(f"No data found for {address}")
 
             if type(data) is dict:
-                keys = ["address", "portfolio", "fees", "fills"]
+                keys = ["address", "portfolio", "fees", "fills", "state"]
                 is_all_key = all(key in data for key in keys)
                 if not is_all_key:
                     print(f"Missing keys in {address}: {data.keys()}")
@@ -376,6 +420,7 @@ def get_all_cached_user_data(st, is_debug=False):
 def get_user_stats():
     """Get statistics about fetched users."""
     ensure_user_cache_dirs()
+    fetch_leaderboard()
 
     # Count fetched addresses
     fetched_count = len(get_fetched_addresses())
