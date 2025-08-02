@@ -53,7 +53,8 @@ is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
 is_cache_used = False
 is_renew_data = False
-
+relevant_symbols = ["PUMP"]  # futuresはcoin名、spotは@number
+is_disctation_trader = True
 # ────────────────────────────────────────────────────────────────
 # Parameters for weight calculation
 # ────────────────────────────────────────────────────────────────
@@ -182,7 +183,7 @@ else:
     raise ValueError(f"Invalid data_range: {data_range}. Choose 'allTime' or 'month'.")
 
 
-def new_process_user_data_for_analysis(user_data_list, relevant_symbols=[]):
+def new_process_user_data_for_analysis(user_data_list):
 
     # Process vault details from cache
     progress_bar = st.progress(0)
@@ -192,17 +193,17 @@ def new_process_user_data_for_analysis(user_data_list, relevant_symbols=[]):
     total_steps = len(user_data_list)
 
     for itr, user_data in enumerate(user_data_list):
+        identifier = user_data[identifier_name.lower()]
+
         if data_type == DataType.USER:
             traded_symbols = user_data["fills"]["traded_symbols"]
             if relevant_symbols and (
                 set(traded_symbols) & set(relevant_symbols) == set()
             ):
-                print(
-                    f"No relevant symbols:{relevant_symbols} are traded by user {itr + 1}/{len(user_data_list)}: {identifier[:15]} in data_range: {data_range}. Skipping..."
-                )
+                # print(
+                #     f"No relevant symbols:{relevant_symbols} are traded by user {itr + 1}/{len(user_data_list)}: {identifier[:15]} in data_range: {data_range}. Skipping..."
+                # )
                 continue
-
-        identifier = user_data[identifier_name.lower()]
 
         progress_bar.progress((itr + 1) / total_steps)
         status_text.text(
@@ -394,6 +395,9 @@ def new_process_user_data_for_analysis(user_data_list, relevant_symbols=[]):
                     f"Total {identifier_name} Value": float(
                         data_source_accountValueHistory[-1][1]
                     ),
+                    f"Total {identifier_name} PnL": float(
+                        data_source_pnlHistory[-1][1]
+                    ),
                     "Days from Return(Estimate)": len(ret) * sampling_days,
                     f"{sharpe_prefix} Sharpe Ratio": ret.mean() / ret.std(),
                     f"{sharpe_prefix} Sortino Ratio": (
@@ -450,7 +454,6 @@ def new_process_user_data_for_analysis(user_data_list, relevant_symbols=[]):
                     )
 
                     metrics["Estimated Fill Counts (30D)"] = fills_count_estimated
-                    metrics["Estimated Fill Counts (30D) 2"] = fills_count_estimated
 
                     metrics["Perp Taker Fee (bips)"] = (
                         float(user_data["fees"]["userAddRate"]) * 10000
@@ -673,155 +676,178 @@ if filter_.strip():  # Check that the filter is not empty
         )
     ]
 
+is_algo = not is_disctation_trader
 
 # Organize sliders into rows of 3
 sliders = [
     # from "https://api-ui.hyperliquid.xyz/info"
     {
-        "label": f"Min Total {identifier_name} Value",
+        "label": f"Total {identifier_name} Value",
         "column": f"Total {identifier_name} Value",
-        "max": False,
-        "default": 100,
+        "default_min": 100,
+        "default_max": float("inf") if is_algo else 1000_000,
         "step": 10,
+        "log_scale": True,
     },
     {
-        "label": "Min Days from Return(Estimate)",
+        "label": f"Total {identifier_name} PnL",
+        "column": f"Total {identifier_name} PnL",
+        "default_min": 10000,
+        "default_max": float("inf") if is_algo else 1000_000,
+        "step": 1,
+        "log_scale": True,
+    },
+    {
+        "label": "Days from Return(Estimate)",
         "column": "Days from Return(Estimate)",
-        "max": False,
-        "default": 90 if data_range == DataRange.ALL_TIME else 30,
+        "default_min": 90 if data_range == DataRange.ALL_TIME else 30,
+        "default_max": 10000,
         "step": 1,
+        "log_scale": False,
     },
     {
-        "label": f"Min {sharpe_prefix} Sharpe Ratio",
+        "label": f"{sharpe_prefix} Sharpe Ratio",
         "column": f"{sharpe_prefix} Sharpe Ratio",
-        "max": False,
-        "default": 0.1,
+        "default_min": 0.1 if is_algo else -0.1,
+        "default_max": 10,
         "step": 0.05,
+        "log_scale": False,
     },
     {
-        "label": f"Min {sharpe_prefix} Sortino Ratio",
+        "label": f"{sharpe_prefix} Sortino Ratio",
         "column": f"{sharpe_prefix} Sortino Ratio",
-        "max": False,
-        "default": 0.1,
+        "default_min": 0.1 if is_algo else -0.1,
+        "default_max": 10,
         "step": 0.05,
+        "log_scale": False,
     },
     {
-        "label": "Min Annualized Gain(simple) %/yr",
+        "label": "Annualized Gain(simple) %/yr",
         "column": "Annualized Gain(simple) %/yr",
-        "max": False,
-        "default": 20,
+        "default_min": 20 if is_algo else -20,
+        "default_max": 1000_000,
         "step": 1,
+        "log_scale": True,
     },
     {
-        "label": "Min Annualized Median Gain(compound) %/yr",
+        "label": "Annualized Median Gain(compound) %/yr",
         "column": "Annualized Median Gain(compound) %/yr",
-        "max": False,
-        "default": 0,
+        "default_min": 0,
+        "default_max": 1000_000,
         "step": 1,
+        "log_scale": True,
     },
     {
         "label": "Max DD %",
         "column": "Max DD %",
-        "max": True,
-        "default": 50,
+        "default_min": 0,
+        "default_max": 50 if is_algo else 100,
         "step": 1,
+        "log_scale": False,
     },
     {
-        "label": "Max Rekt",
+        "label": "Rekt",
         "column": "Rekt",
-        "max": True,
-        "default": 0,
+        "default_min": 0,
+        "default_max": 0 if is_algo else 100,
         "step": 1,
+        "log_scale": False,
     },
     {
-        "label": "Min Followers",
+        "label": "Followers",
         "column": "Act. Followers",
-        "max": False,
-        "default": 0,
+        "default_min": 0,
+        "default_max": 1000_000,
         "step": 1,
+        "log_scale": True,
     },
     {
-        "label": "Min APR(30D) %",
+        "label": "APR(30D) %",
         "column": "APR(30D) %",
-        "max": False,
-        "default": 0,
+        "default_min": 0 if is_algo else -100,
+        "default_max": 1000,
         "step": 1,
+        "log_scale": False,
     },
     {
-        "label": "Min TVL Leader fraction %",
+        "label": "TVL Leader fraction %",
         "column": "TVL Leader fraction %",
-        "max": False,
-        "default": 0,
+        "default_min": 0,
+        "default_max": 100,
         "step": 1,
+        "log_scale": False,
     },
     {
-        "label": "Min Estimated Fill Counts (30D)",
+        "label": "Estimated Fill Counts (30D)",
         "column": "Estimated Fill Counts (30D)",
-        "max": False,
-        "default": 60,
+        "default_min": 1,
+        "default_max": float("inf") if is_algo else 1000,
         "step": 1,
+        "log_scale": True,
     },
     {
-        "label": "Max Estimated Fill Counts (30D)",
-        "column": "Estimated Fill Counts (30D) 2",
-        "max": True,
-        "default": 10000000,
-        "step": 1,
-    },
-    {
-        "label": "Min Perp Taker Fee (bips)",
+        "label": "Perp Taker Fee (bips)",
         "column": "Perp Taker Fee (bips)",
-        "max": False,
-        "default": 0,
+        "default_min": -100,
+        "default_max": 100,
         "step": 0.0001,
+        "log_scale": False,
     },
     {
-        "label": "Min Spot Taker Fee (bips)",
+        "label": "Spot Taker Fee (bips)",
         "column": "Spot Taker Fee (bips)",
-        "max": False,
-        "default": 0,
+        "default_min": -100,
+        "default_max": 100,
         "step": 0.0001,
+        "log_scale": False,
     },
     {
-        "label": "Min Maker Volume (14D)",
+        "label": "Maker Volume (14D)",
         "column": "Maker Volume (14D)",
-        "max": False,
-        "default": 0,
+        "default_min": 0,
+        "default_max": float("inf") if is_algo else 10_000_000,
         "step": 100,
+        "log_scale": True,
     },
     {
-        "label": "Min Taker Volume (14D)",
+        "label": "Taker Volume (14D)",
         "column": "Taker Volume (14D)",
-        "max": False,
-        "default": 0,
+        "default_min": 0,
+        "default_max": float("inf") if is_algo else 10_000_000,
         "step": 100,
+        "log_scale": True,
     },
     # from "https://stats-data.hyperliquid.xyz/Mainnet/vaults"
     {
-        "label": "Min TVL",
+        "label": "TVL",
         "column": "Total Value Locked",
-        "max": False,
-        "default": 10000,
+        "default_min": 10000,
+        "default_max": float("inf") if is_algo else 1_000_000,
         "step": 10,
+        "log_scale": True,
     },
     {
-        "label": "Min Days Since",
+        "label": "Days Since",
         "column": "Days Since",
-        "max": False,
-        "default": 90,
+        "default_min": 90,
+        "default_max": 1000,
         "step": 1,
+        "log_scale": False,
     },
     {
-        "label": "Min APR(7D)",
+        "label": "APR(7D) %",
         "column": "APR(7D) %",
-        "max": False,
-        "default": 0,
+        "default_min": 0 if is_algo else -100,
+        "default_max": 1000,
         "step": 1,
+        "log_scale": False,
     },
 ]
 
 
-def slider_with_label(label, col, min_value, max_value, default_value, step, key):
+def slider_with_label(
+    label, col, min_value, max_value, default_value, step, key, log_scale=False
+):
     """Create a slider with a custom centered title."""
     col.markdown(
         f"<h3 style='text-align: center;'>{label}</h3>", unsafe_allow_html=True
@@ -833,21 +859,153 @@ def slider_with_label(label, col, min_value, max_value, default_value, step, key
         )
         return None
 
-    if default_value < min_value:
-        default_value = min_value
+    if log_scale:
+        # symlogスケールの場合
+        # symlogは0付近の値も適切に扱える
+        # symlog(x) = arcsinh(x) = log(x + sqrt(x^2 + 1))
+        symlog_min = np.arcsinh(min_value)
+        symlog_max = np.arcsinh(max_value)
+        symlog_default = np.arcsinh(default_value)
 
-    if default_value > max_value:
-        default_value = max_value
+        # デフォルト値の範囲調整
+        if symlog_default < symlog_min:
+            symlog_default = symlog_min
+        if symlog_default > symlog_max:
+            symlog_default = symlog_max
 
-    return col.slider(
-        label,
-        min_value=min_value,
-        max_value=max_value,
-        value=default_value,
-        step=step,
-        label_visibility="hidden",
-        key=key,
+        # symlogスケール用のスライダー
+        # symlogスケールの範囲を分割して、段階的な値を作成
+        num_steps = 100
+        symlog_steps = np.linspace(symlog_min, symlog_max, num_steps + 1)
+
+        # symlogの逆変換（sinh）を使用して実際の値に戻す
+        actual_steps = [np.sinh(symlog_step) for symlog_step in symlog_steps]
+
+        # デフォルト値に最も近いインデックスを見つける
+        default_idx = min(
+            range(len(actual_steps)), key=lambda i: abs(actual_steps[i] - default_value)
+        )
+
+        # select_sliderを使用して実際の値を表示
+        selected_value = col.select_slider(
+            label,
+            options=actual_steps,
+            value=actual_steps[default_idx],
+            format_func=lambda x: "∞" if x == float("inf") else f"{x:,.0f}",
+            label_visibility="hidden",
+            key=key,
+        )
+
+        return selected_value
+    else:
+        # 通常のリニアスケール
+        if default_value < min_value:
+            default_value = min_value
+        if default_value > max_value:
+            default_value = max_value
+
+        return col.slider(
+            label,
+            min_value=min_value,
+            max_value=max_value,
+            value=default_value,
+            step=step,
+            label_visibility="hidden",
+            key=key,
+        )
+
+
+def range_slider_with_label(
+    label,
+    col,
+    min_value,
+    max_value,
+    default_min,
+    default_max,
+    step,
+    key,
+    log_scale=False,
+):
+    """Create a range slider with a custom centered title."""
+    col.markdown(
+        f"<h3 style='text-align: center;'>{label}</h3>", unsafe_allow_html=True
     )
+    if not min_value < max_value:
+        col.markdown(
+            f"<p style='text-align: center;'>No choice available ({min_value} for all)</p>",
+            unsafe_allow_html=True,
+        )
+        return None, None
+
+    if log_scale:
+        # symlogスケールの場合
+        # symlogは0付近の値も適切に扱える
+        # symlog(x) = arcsinh(x) = log(x + sqrt(x^2 + 1))
+        symlog_min = np.arcsinh(min_value)
+        symlog_max = (
+            np.arcsinh(max_value) if max_value != float("inf") else np.arcsinh(10**10)
+        )
+        symlog_default_min = np.arcsinh(default_min)
+        symlog_default_max = (
+            np.arcsinh(default_max) if default_max != float("inf") else symlog_max
+        )
+
+        # デフォルト値の範囲調整
+        if symlog_default_min < symlog_min:
+            symlog_default_min = symlog_min
+        if symlog_default_max > symlog_max:
+            symlog_default_max = symlog_max
+        if symlog_default_min > symlog_default_max:
+            symlog_default_min, symlog_default_max = (
+                symlog_default_max,
+                symlog_default_min,
+            )
+
+        # symlogスケール用のスライダー
+        # symlogスケールの範囲を分割して、段階的な値を作成
+        num_steps = 100
+        symlog_steps = np.linspace(symlog_min, symlog_max, num_steps + 1)
+
+        # symlogの逆変換（sinh）を使用して実際の値に戻す
+        actual_steps = [np.sinh(symlog_step) for symlog_step in symlog_steps]
+
+        # デフォルト値に最も近いインデックスを見つける
+        default_min_idx = min(
+            range(len(actual_steps)), key=lambda i: abs(actual_steps[i] - default_min)
+        )
+        default_max_idx = min(
+            range(len(actual_steps)), key=lambda i: abs(actual_steps[i] - default_max)
+        )
+
+        # select_sliderを使用して実際の値を表示（範囲選択）
+        selected_values = col.select_slider(
+            label,
+            options=actual_steps,
+            value=(actual_steps[default_min_idx], actual_steps[default_max_idx]),
+            format_func=lambda x: "∞" if x == float("inf") else f"{x:,.0f}",
+            label_visibility="hidden",
+            key=key,
+        )
+
+        return selected_values
+    else:
+        # 通常のリニアスケール
+        if default_min < min_value:
+            default_min = min_value
+        if default_max > max_value:
+            default_max = max_value
+        if default_min > default_max:
+            default_min, default_max = default_max, default_min
+
+        return col.slider(
+            label,
+            min_value=min_value,
+            max_value=max_value,
+            value=(default_min, default_max),
+            step=step,
+            label_visibility="hidden",
+            key=key,
+        )
 
 
 for i in range(0, len(sliders), 3):
@@ -855,22 +1013,23 @@ for i in range(0, len(sliders), 3):
     for slider, col in zip(sliders[i : i + 3], cols):
         column = slider["column"]
         if column in filtered_df.columns:
-            # 　手で指定した値
-            value = slider_with_label(
+            # Range slider (all sliders are now range sliders)
+            values = range_slider_with_label(
                 slider["label"],
                 col,
                 min_value=float(filtered_df[column].min()),
                 max_value=float(filtered_df[column].max()),
-                default_value=float(slider["default"]),
+                default_min=float(slider["default_min"]),
+                default_max=float(slider["default_max"]),
                 step=float(slider["step"]),
                 key=f"slider_{column}",
+                log_scale=slider.get("log_scale", False),
             )
-            if value is not None:
-
-                if slider["max"]:
-                    filtered_df = filtered_df[filtered_df[column] <= value]
-                else:
-                    filtered_df = filtered_df[filtered_df[column] >= value]
+            if values is not None and values != (None, None):
+                min_val, max_val = values
+                filtered_df = filtered_df[
+                    (filtered_df[column] >= min_val) & (filtered_df[column] <= max_val)
+                ]
 
 
 # -────────────────────────────────────────────────────────────
