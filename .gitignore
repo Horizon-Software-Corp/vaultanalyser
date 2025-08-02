@@ -10,3 +10,6 @@ processed_addresses.txt
 userdata_example.json
 vaultdata_example.json
 test.ipynb
+hyperliquid-python-sdk/
+utils/proxies.py
+*.pyc

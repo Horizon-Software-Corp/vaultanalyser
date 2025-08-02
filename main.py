@@ -52,7 +52,7 @@ data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH
 is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
 is_cache_used = False
-is_renew_data = True
+is_renew_data = False
 
 # ────────────────────────────────────────────────────────────────
 # Parameters for weight calculation
@@ -97,9 +97,7 @@ def get_cache_date(CACHE_DATE_FILE):
     return cache_date
 
 
-def copy_entire_dir_with_date(
-    src_dir: str | Path, dst_parent: str | Path, date
-) -> None:
+def copy_entire_dir_with_date(src_dir: str | Path, dst_parent: str | Path) -> None:
     """
     src_dir の内容（ファイル・フォルダを含む全て）を
     dst_parent/<basename_of_src>_YYYY-MM-DD へ丸ごとコピーします。
@@ -118,6 +116,7 @@ def copy_entire_dir_with_date(
     dst_parent.mkdir(parents=True, exist_ok=True)
 
     # コピー先のフルパスを組み立て
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     dst = dst_parent / f"{src.name}_{date}"
     print(dst)
 
@@ -135,9 +134,16 @@ if is_renew_data:
     cache_date = get_cache_date(CACHE_DATE_FILE)
     SRC_DIR = f"./cache/{data_type_dir}/"
     DST_DIR = f"./cache_history/{data_type_dir}/"
+    DST_PATH = DST_DIR + f"{data_type_dir}_{cache_date}"
 
-    if not os.path.exists(DST_DIR + f"{data_type_dir}_{cache_date}"):
-        copy_entire_dir_with_date(SRC_DIR, DST_DIR, cache_date)
+    if not os.path.exists(DST_PATH) or pd.Timestamp.now() - pd.Timestamp(
+        cache_date
+    ) > pd.Timedelta(days=7):
+
+        copy_entire_dir_with_date(SRC_DIR, DST_DIR)
+    else:
+        # 1日ずれ、みたいなので再取得しないため
+        print(f"Cache for {data_type} on {cache_date} already exists at {DST_PATH}.")
 
 
 if data_type == DataType.VAULT:
@@ -152,20 +158,7 @@ if data_type == DataType.VAULT:
         st.warning("⚠️ Cache not found. Data will be fetched fresh.")
     st.markdown("---")  # Add a separator line
 
-elif data_type == DataType.USER:
-    user_stats = get_user_stats()
-
-    # Display statistics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Leaderboard", user_stats["total_addresses"])
-    with col2:
-        st.metric("Fetched Users", user_stats["fetched_addresses"])
-    with col3:
-        st.metric("Failed Addresses", user_stats["failed_addresses"])
-    with col4:
-        st.metric("Cached Data Files", user_stats["cached_data_files"])
-    st.markdown("---")
+# elif data_type == DataType.USER:
 
 
 DATAFRAME_CACHE_FILE = f"./cache/{data_type.lower()}/dataframe.pkl"
@@ -189,7 +182,7 @@ else:
     raise ValueError(f"Invalid data_range: {data_range}. Choose 'allTime' or 'month'.")
 
 
-def new_process_user_data_for_analysis(user_data_list):
+def new_process_user_data_for_analysis(user_data_list, relevant_symbols=[]):
 
     # Process vault details from cache
     progress_bar = st.progress(0)
@@ -199,6 +192,16 @@ def new_process_user_data_for_analysis(user_data_list):
     total_steps = len(user_data_list)
 
     for itr, user_data in enumerate(user_data_list):
+        if data_type == DataType.USER:
+            traded_symbols = user_data["fills"]["traded_symbols"]
+            if relevant_symbols and (
+                set(traded_symbols) & set(relevant_symbols) == set()
+            ):
+                print(
+                    f"No relevant symbols:{relevant_symbols} are traded by user {itr + 1}/{len(user_data_list)}: {identifier[:15]} in data_range: {data_range}. Skipping..."
+                )
+                continue
+
         identifier = user_data[identifier_name.lower()]
 
         progress_bar.progress((itr + 1) / total_steps)
@@ -431,8 +434,23 @@ def new_process_user_data_for_analysis(user_data_list):
                         }
                     )
                 elif data_type == DataType.USER:
-                    metrics["Filled Orders (30D)"] = user_data["fills"]
-                    metrics["Filled Orders (30D) 2"] = user_data["fills"]
+                    fills_count = user_data["fills"]["count"]
+                    max_fill_count = 2000
+                    fills_count_estimated = (
+                        max(
+                            max_fill_count,
+                            int(
+                                fills_count
+                                * pd.Timedelta(days=30).total_seconds()
+                                / user_data["fills"]["last_fill_seconds"]
+                            ),
+                        )
+                        if fills_count == max_fill_count
+                        else fills_count
+                    )
+
+                    metrics["Estimated Fill Counts (30D)"] = fills_count_estimated
+                    metrics["Estimated Fill Counts (30D) 2"] = fills_count_estimated
 
                     metrics["Perp Taker Fee (bips)"] = (
                         float(user_data["fees"]["userAddRate"]) * 10000
@@ -520,10 +538,24 @@ else:
         print(f"Number of cached users: {len(user_data_list)}")
         print(f"Number of failed users: {len(failed_data_list)}")
 
+        user_stats = get_user_stats()
+
+        # Display statistics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Leaderboard", user_stats["total_addresses"])
+        with col2:
+            st.metric("Fetched Users", user_stats["fetched_addresses"])
+        with col3:
+            st.metric("Failed Addresses", user_stats["failed_addresses"])
+        with col4:
+            st.metric("Cached Data Files", user_stats["cached_data_files"])
+        st.markdown("---")
+
         if is_debug:
             st.info(f"Debug mode! only process {len(user_data_list)} {data_type}s")
 
-        if len(user_data_list) < 10000 or len(failed_data_list) > 0:
+        if len(user_data_list) < 19000 or len(failed_data_list) > 0:
             st.warning("⚠️ No user data found. Please download some user's data first.")
 
             # User input and button to process users
@@ -533,7 +565,7 @@ else:
                     "Initial users to download",
                     min_value=1,
                     max_value=MAX_ADDRESSES_TO_FETCH,
-                    value=20000,
+                    value=30000,
                     step=1,
                     help="Number of users to download from leaderboard",
                     key="initial_users_input",
@@ -591,7 +623,7 @@ else:
             users_to_fetch = st.number_input(
                 "Users to process",
                 min_value=1,
-                max_value=20000,
+                max_value=30000,
                 value=MAX_ADDRESSES_TO_FETCH,
                 step=1,
                 help="Number of users to process from leaderboard",
@@ -723,17 +755,17 @@ sliders = [
         "step": 1,
     },
     {
-        "label": "Min Filled Orders (30D)",
-        "column": "Filled Orders (30D)",
+        "label": "Min Estimated Fill Counts (30D)",
+        "column": "Estimated Fill Counts (30D)",
         "max": False,
         "default": 60,
         "step": 1,
     },
     {
-        "label": "Max Filled Orders (30D)",
-        "column": "Filled Orders (30D) 2",
+        "label": "Max Estimated Fill Counts (30D)",
+        "column": "Estimated Fill Counts (30D) 2",
         "max": True,
-        "default": 2000,
+        "default": 10000000,
         "step": 1,
     },
     {
