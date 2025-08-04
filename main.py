@@ -684,7 +684,7 @@ sliders = [
     {
         "label": f"Total {identifier_name} Value",
         "column": f"Total {identifier_name} Value",
-        "default_min": 100,
+        "default_min": 100 if is_algo else 0,
         "default_max": float("inf") if is_algo else 1000_000,
         "step": 10,
         "log_scale": True,
