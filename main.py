@@ -44,22 +44,33 @@ class DataRange(StrEnum):
     MONTH = "month"
 
 
+class FilteringType(StrEnum):
+    NONE = "none"
+    ALGO = "algo"
+    MANUAL = "manual"
+
+
 # ────────────────────────────────────────────────────────────────
 # Parameters
 # ────────────────────────────────────────────────────────────────
 data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
 data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
-MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
+MAX_ITEMS = 1000  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
 is_cache_used = False
 is_renew_data = False
-relevant_symbols = ["PUMP"]  # futuresはcoin名、spotは@number
-is_disctation_trader = True
+# filtering_symbols = lambda symbols_traded: True
+filtering_symbols = lambda symbols_traded: (
+    True if "PUMP" in symbols_traded and "HYPE" in symbols_traded else False
+)
+
+default_filter = FilteringType.NONE
 # ────────────────────────────────────────────────────────────────
 # Parameters for weight calculation
 # ────────────────────────────────────────────────────────────────
 N_ITEMS = 10
-sort_col_weight = "Sharpe Ratio"  # Column to sort by
+# sort_col_weight = "Sharpe Ratio"  # Column to sort by
+sort_col_weight = "Total Address PnL"  # Column to sort by
 rf_rate = 0.09  # Annualized risk-free rate
 is_short = False  # BTC, ETHなどの価格の系列を入れ、そこだけshort許可してもいいかも
 max_leverage = 1
@@ -73,6 +84,10 @@ if data_type == DataType.VAULT:
 elif data_type == DataType.USER:
     page_icon = "👤"
     identifier_name = "Address"
+else:
+    raise ValueError(
+        f"Invalid data_type: {data_type}. Choose from {DataType.VAULT} or {DataType.USER}."
+    )
 
 # Page config
 st.set_page_config(
@@ -197,9 +212,7 @@ def new_process_user_data_for_analysis(user_data_list):
 
         if data_type == DataType.USER:
             traded_symbols = user_data["fills"]["traded_symbols"]
-            if relevant_symbols and (
-                set(traded_symbols) & set(relevant_symbols) == set()
-            ):
+            if not filtering_symbols(traded_symbols):
                 # print(
                 #     f"No relevant symbols:{relevant_symbols} are traded by user {itr + 1}/{len(user_data_list)}: {identifier[:15]} in data_range: {data_range}. Skipping..."
                 # )
@@ -227,6 +240,10 @@ def new_process_user_data_for_analysis(user_data_list):
                     check_an_identifier = None  # "HLP", ...
                 elif data_type == DataType.USER:
                     check_an_identifier = None  # "0x1234...", ...
+                else:
+                    raise ValueError(
+                        f"Invalid data_type: {data_type}. Choose from {DataType.VAULT} or {DataType.USER}."
+                    )
 
                 # Check a vault or an address
                 if check_an_identifier and identifier != check_an_identifier:
@@ -642,6 +659,10 @@ else:
                         if os.path.exists(DATAFRAME_CACHE_FILE):
                             os.remove(DATAFRAME_CACHE_FILE)
                         st.rerun()
+    else:
+        raise ValueError(
+            f"Invalid data_type: {data_type}. Choose from {DataType.VAULT} or {DataType.USER}."
+        )
 
     # Save to cache
     final_df.to_pickle(DATAFRAME_CACHE_FILE)
@@ -676,7 +697,16 @@ if filter_.strip():  # Check that the filter is not empty
         )
     ]
 
-is_algo = not is_disctation_trader
+if default_filter == FilteringType.ALGO:
+    is_algo = True
+elif default_filter == FilteringType.MANUAL:
+    is_algo = False
+elif default_filter == FilteringType.NONE:
+    is_algo = True  # あとで上書き
+else:
+    raise ValueError(
+        f"Invalid default_filter: {default_filter}. Choose from {FilteringType}."
+    )
 
 # Organize sliders into rows of 3
 sliders = [
@@ -843,6 +873,11 @@ sliders = [
         "log_scale": False,
     },
 ]
+
+if default_filter == FilteringType.NONE:
+    for slider in sliders:
+        slider["default_min"] = -10_000_000
+        slider["default_max"] = 10_000_000
 
 
 def slider_with_label(
@@ -1042,9 +1077,8 @@ elif sort_col_weight == "Sortino Ratio":
     sort_col_weight = f"{sharpe_prefix} Sortino Ratio"
     ascending = False
 else:
-    raise ValueError(
-        f"Invalid sort_col_weight: {sort_col_weight}. Choose 'Sharpe Ratio' or 'Sortino Ratio'."
-    )
+    ascending = False
+    pass
 
 
 filtered_weight_df = filtered_df.sort_values(
@@ -1054,13 +1088,12 @@ filtered_weight_df = filtered_df.sort_values(
 # print("\n")
 # print(filtered_weight_df[sort_col_weight])
 
-# validatorを除く
-filtered_weight_df = filtered_weight_df[filtered_weight_df[sort_col_weight] < 2]
+# # validatorを除く
+# filtered_weight_df = filtered_weight_df[filtered_weight_df[sort_col_weight] < 2]
 
 idx_weights = filtered_weight_df.index[:N_ITEMS]
-df_rets_weight = df_rets.loc[
-    :, idx_weights
-]  # df_retsは.Tしてあるので、colが資産名 -> 第二スライス
+df_rets_weight = df_rets.loc[:, idx_weights]
+# df_retsは.Tしてあるので、colが資産名 -> 第二スライス
 
 # dropna(axis=0, how="any") したあとのデータを使って計算したsharpe ratio
 print("\n")
