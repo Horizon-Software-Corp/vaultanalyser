@@ -56,7 +56,7 @@ class FilteringType(StrEnum):
 data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
 data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
-MAX_ITEMS = 1000  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
+MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
 is_cache_used = False
 is_renew_data = False
 # filtering_symbols = lambda symbols_traded: True
@@ -64,13 +64,13 @@ filtering_symbols = lambda symbols_traded: (
     True if "PUMP" in symbols_traded and "HYPE" in symbols_traded else False
 )
 
-default_filter = FilteringType.NONE
+default_filter = FilteringType.MANUAL
 # ────────────────────────────────────────────────────────────────
 # Parameters for weight calculation
 # ────────────────────────────────────────────────────────────────
-N_ITEMS = 10
-# sort_col_weight = "Sharpe Ratio"  # Column to sort by
-sort_col_weight = "Total Address PnL"  # Column to sort by
+N_ITEMS = 20
+sort_col_weight = "Sharpe Ratio"  # Column to sort by
+# sort_col_weight = "Total Address PnL"  # Column to sort by
 rf_rate = 0.09  # Annualized risk-free rate
 is_short = False  # BTC, ETHなどの価格の系列を入れ、そこだけshort許可してもいいかも
 max_leverage = 1
@@ -203,8 +203,8 @@ def new_process_user_data_for_analysis(user_data_list):
     # Process vault details from cache
     progress_bar = st.progress(0)
     status_text = st.empty()
-    indicators = []
-    rets = []
+    indicators = {}
+    rets = {}
     total_steps = len(user_data_list)
 
     for itr, user_data in enumerate(user_data_list):
@@ -498,9 +498,17 @@ def new_process_user_data_for_analysis(user_data_list):
                 # Unpacks the metrics dictionary
                 metrics[identifier_name] = identifier
 
-                indicators.append(metrics)
+                indicators[itr] = metrics
 
-                rets.append(ret)
+                rets[itr] = ret
+
+                if identifier == "0x15d10a8a050edfd57fa553190f1512e32d247704":
+                    print(f"ツァビ発見！！！:{itr}")
+                    pprint(metrics)
+                elif identifier == "0x90ee80619c9758baf30466bf69015c4c5447b85f":
+                    print(f"ツァビ現物発見！！！:{itr}")
+                    pprint(metrics)
+
                 break
 
     progress_bar.empty()
@@ -617,15 +625,24 @@ else:
             st.stop()
 
         # Create DataFrame
-        final_df = pd.DataFrame(indicators)
+        final_df = pd.DataFrame(indicators).T
 
-        df_rets = pd.DataFrame(rets).T
+        # 数値列を明示的に数値型に変換
+        numeric_columns = [
+            col for col in final_df.columns if col not in ["Address", "Link"]
+        ]
+        for col in numeric_columns:
+            final_df[col] = pd.to_numeric(final_df[col], errors="coerce")
+
+        df_rets = pd.DataFrame(rets)
         # for col in df_rets.columns:
         #     s_col = df_rets[col]
         #     if s_col.isna().any():
         #         pass
         #         # print(f"Warning: {col} has NaN values: {s_col.isna()}")
+
         df_rets = df_rets.dropna(axis=0, how="any")
+        print("df_rets:")
         print(df_rets)
 
         # Add a column with clickable links to HyperLiquid
@@ -635,6 +652,7 @@ else:
 
         # Display results
         st.subheader(f"Users analysed ({len(final_df)})")
+        print(final_df.loc[643])
 
         # Add process more users button with user input
         col1, col2, col3 = st.columns([1, 1, 3])
@@ -714,7 +732,7 @@ sliders = [
     {
         "label": f"Total {identifier_name} Value",
         "column": f"Total {identifier_name} Value",
-        "default_min": 100 if is_algo else 0,
+        "default_min": 100 if is_algo else -100,
         "default_max": float("inf") if is_algo else 1000_000,
         "step": 10,
         "log_scale": True,
@@ -722,7 +740,7 @@ sliders = [
     {
         "label": f"Total {identifier_name} PnL",
         "column": f"Total {identifier_name} PnL",
-        "default_min": 10000,
+        "default_min": 10_000 if is_algo else 100_000,
         "default_max": float("inf") if is_algo else 1000_000,
         "step": 1,
         "log_scale": True,
@@ -738,7 +756,7 @@ sliders = [
     {
         "label": f"{sharpe_prefix} Sharpe Ratio",
         "column": f"{sharpe_prefix} Sharpe Ratio",
-        "default_min": 0.1 if is_algo else -0.1,
+        "default_min": 0.1 if is_algo else 0.1,
         "default_max": 10,
         "step": 0.05,
         "log_scale": False,
@@ -746,7 +764,7 @@ sliders = [
     {
         "label": f"{sharpe_prefix} Sortino Ratio",
         "column": f"{sharpe_prefix} Sortino Ratio",
-        "default_min": 0.1 if is_algo else -0.1,
+        "default_min": 0.1 if is_algo else 0.1,
         "default_max": 10,
         "step": 0.05,
         "log_scale": False,
@@ -762,7 +780,7 @@ sliders = [
     {
         "label": "Annualized Median Gain(compound) %/yr",
         "column": "Annualized Median Gain(compound) %/yr",
-        "default_min": 0,
+        "default_min": 0 if is_algo else -100,
         "default_max": 1000_000,
         "step": 1,
         "log_scale": True,
@@ -811,7 +829,7 @@ sliders = [
         "label": "Estimated Fill Counts (30D)",
         "column": "Estimated Fill Counts (30D)",
         "default_min": 1,
-        "default_max": float("inf") if is_algo else 1000,
+        "default_max": float("inf") if is_algo else 10000,
         "step": 1,
         "log_scale": True,
     },
@@ -876,8 +894,8 @@ sliders = [
 
 if default_filter == FilteringType.NONE:
     for slider in sliders:
-        slider["default_min"] = -10_000_000
-        slider["default_max"] = 10_000_000
+        slider["default_min"] = -10_000_000_000
+        slider["default_max"] = 10_000_000_000
 
 
 def slider_with_label(
@@ -1128,14 +1146,38 @@ else:
     st.title(f"{data_type} filtered ({orig_len}) ")
 
 
+# final_dfのインデックスを新しいカラム"User Id"として保存し、インデックスをリセット
+final_df_with_user_id = final_df.copy()
+final_df_with_user_id["User Id"] = final_df_with_user_id.index
+final_df_with_user_id = final_df_with_user_id.reset_index(drop=True)
+
+# カラムの順序を調整（User Idを最初に）
+cols = final_df_with_user_id.columns.tolist()
+cols = ["User Id"] + [col for col in cols if col != "User Id"]
+final_df_with_user_id = final_df_with_user_id[cols]
+
+# filtered_dfのインデックスを新しいカラム"User Id"として保存し、インデックスをリセット
+filtered_df_with_user_id = filtered_df.copy()
+filtered_df_with_user_id["User Id"] = filtered_df_with_user_id.index
+filtered_df_with_user_id = filtered_df_with_user_id.reset_index(drop=True)
+
+# カラムの順序を調整（User Idを最初に）
+cols = filtered_df_with_user_id.columns.tolist()
+cols = ["User Id"] + [col for col in cols if col != "User Id"]
+filtered_df_with_user_id = filtered_df_with_user_id[cols]
+
+print(filtered_df_with_user_id)
+print(final_df_with_user_id)
+
+# filtered_dfのインデックスを保持したまま、列の統計値はfinal_df全体から計算
 styler = MetricsStyler(p_th=0.05, zmax=3).generate_style(
-    filtered_df, final_df, data_range
+    filtered_df_with_user_id, final_df_with_user_id, data_range
 )
 
 st.dataframe(
     styler,
     use_container_width=True,
-    height=(len(filtered_df) * 35) + 50,
+    height=(len(filtered_df_with_user_id) * 35) + 50,
     column_config={
         "Link": st.column_config.LinkColumn(
             f"{data_type} Link", display_text=f"{data_type} Link"

@@ -104,12 +104,13 @@ class MetricsStyler:
 
     # ────────── メインエントリ ──────────
     def generate_style(
-        self, df: pd.DataFrame, df_all: pd.DataFrame, data_range: str = "allTime"
+        self, df: pd.DataFrame, df_all: pd.DataFrame, data_range: str = "month"
     ):
         styler = df.style
 
         for col in df.columns:
-            if not is_numeric_dtype(df[col]):
+            if col == "User Id" or not is_numeric_dtype(df[col]):
+                print(f"Skipping non-numeric column: {col}")
                 continue  # 数値列以外は無視
 
             # ---------- 1) rekt 列：0→緑, 1↑→赤 ----------
@@ -122,6 +123,7 @@ class MetricsStyler:
                     ),
                     subset=[col],
                 )
+                print(f"Styled 'Rekt' column: {col}")
                 continue
 
             # ── p 値列 ────────────────────────────────────
@@ -134,6 +136,7 @@ class MetricsStyler:
                     lambda p, _c=sig_color: self._style_p(p, _c),
                     subset=[col],
                 )
+                print(f"Skipping non-numeric column: {col}")
                 continue
 
             # ── z-score 列 ───────────────────────────────
@@ -145,6 +148,7 @@ class MetricsStyler:
 
             if not any(k in col for k in ["Weight"]):
                 series_for_stats = df_all[col].apply(scaling_func)
+                print(f"Calculating robust stats for {col}...")
                 mu, sigma = self._robust_stats(series_for_stats)
 
             # ② “ratio / gain / apr” → µ を 0 に固定
