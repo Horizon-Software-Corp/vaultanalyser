@@ -14,6 +14,8 @@ from enum import StrEnum
 import os
 import shutil
 from pathlib import Path
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 
 from utils.vaults import (
@@ -54,17 +56,17 @@ class FilteringType(StrEnum):
 # Parameters
 # ────────────────────────────────────────────────────────────────
 data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
-data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
+data_range = DataRange.ALL_TIME  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
 MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
 is_cache_used = False
-is_renew_data = False
-# filtering_symbols = lambda symbols_traded: True
-filtering_symbols = lambda symbols_traded: (
-    True if "PUMP" in symbols_traded and "HYPE" in symbols_traded else False
-)
+is_renew_data = True
+filtering_symbols = lambda symbols_traded: True
+# filtering_symbols = lambda symbols_traded: (
+#     True if "PUMP" in symbols_traded and "HYPE" in symbols_traded else False
+# )
 
-default_filter = FilteringType.MANUAL
+default_filter = FilteringType.NONE
 # ────────────────────────────────────────────────────────────────
 # Parameters for weight calculation
 # ────────────────────────────────────────────────────────────────
@@ -187,6 +189,8 @@ if data_range == DataRange.ALL_TIME:
     resample_rule = "W-MON"
     sharpe_prefix = "Weekly"
     separation_params = {"h": 8, "SR0": 0.1, "LT": 16}
+    # Accept both 'allTime' and 'a' for ALL_TIME
+    accepted_period_names = ["allTime", "a"]
 
 elif data_range == DataRange.MONTH:
     data_index = 2
@@ -194,6 +198,8 @@ elif data_range == DataRange.MONTH:
     resample_rule = "D"
     sharpe_prefix = "Daily"
     separation_params = {"h": 8, "SR0": 0.1, "LT": None}
+    # Accept both 'month' and 'm' for MONTH
+    accepted_period_names = ["month", "m"]
 else:
     raise ValueError(f"Invalid data_range: {data_range}. Choose 'allTime' or 'month'.")
 
@@ -206,6 +212,16 @@ def new_process_user_data_for_analysis(user_data_list):
     indicators = {}
     rets = {}
     total_steps = len(user_data_list)
+    print(f"Total users to process: {total_steps}")
+
+    skipped_count = 0
+    skipped_reasons = {
+        "no_data_range": 0,
+        "zero_std": 0,
+        "recent_start": 0,
+        "no_portfolio": 0,
+        "empty_pnl": 0,
+    }
 
     for itr, user_data in enumerate(user_data_list):
         identifier = user_data[identifier_name.lower()]
@@ -223,10 +239,33 @@ def new_process_user_data_for_analysis(user_data_list):
             f"Analyzing user {itr + 1}/{len(user_data_list)}: {identifier[:15]}..."
         )
 
-        portfolio_data = user_data["portfolio"]
+        portfolio_data = user_data.get("portfolio", [])
 
+        if not portfolio_data:
+            skipped_count += 1
+            skipped_reasons["no_portfolio"] += 1
+            continue
+
+        # Debug: Check what periods are available for first few users
+        if itr < 3:
+            available_periods = [pd[0] for pd in portfolio_data if pd]
+            print(
+                f"User {itr}: Available periods: {available_periods}, Looking for: {data_range}"
+            )
+            # Check the actual structure of portfolio_data
+            if len(portfolio_data) > 0:
+                print(
+                    f"  First period data structure: {portfolio_data[0][0] if len(portfolio_data[0]) > 0 else 'empty'}"
+                )
+                print(f"  Portfolio data length: {len(portfolio_data)}")
+
+        found_period = False
         for period_data in portfolio_data:
-            if period_data[0] == data_range:
+            period_name = period_data[0] if period_data else None
+
+            # Check if this period matches what we're looking for
+            if period_name in accepted_period_names:
+                found_period = True
                 if data_type == DataType.VAULT:
                     leader_eq = next(
                         f for f in user_data["followers"] if f["user"] == "Leader"
@@ -234,6 +273,7 @@ def new_process_user_data_for_analysis(user_data_list):
                     leader_eq = float(leader_eq)
                     tvl = sum(float(f["vaultEquity"]) for f in user_data["followers"])
                     if tvl == 0:
+                        print(f"[Skipped] No TVL for {identifier_name}")
                         continue
                     leader_fraction = leader_eq / tvl  # 0.0–1.0
 
@@ -247,12 +287,18 @@ def new_process_user_data_for_analysis(user_data_list):
 
                 # Check a vault or an address
                 if check_an_identifier and identifier != check_an_identifier:
+                    print(f"[Skipped] Identifier mismatch for {identifier_name}")
                     continue
 
                 data_source_pnlHistory = period_data[1].get("pnlHistory", [])
                 data_source_accountValueHistory = period_data[1].get(
                     "accountValueHistory", []
                 )
+
+                if not data_source_pnlHistory or not data_source_accountValueHistory:
+                    skipped_count += 1
+                    skipped_reasons["empty_pnl"] += 1
+                    continue
                 rebuilded_pnl = []
                 final_capital_virtuals = []
                 used_capitals = []
@@ -363,9 +409,13 @@ def new_process_user_data_for_analysis(user_data_list):
                 #     )
 
                 if ret.std() == 0:
+                    skipped_count += 1
+                    skipped_reasons["zero_std"] += 1
                     continue
 
                 if index_ts[0] > pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=28):
+                    skipped_count += 1
+                    skipped_reasons["recent_start"] += 1
                     continue
 
                 bankrupt = ret <= -1
@@ -502,17 +552,108 @@ def new_process_user_data_for_analysis(user_data_list):
 
                 rets[itr] = ret
 
-                if identifier == "0x15d10a8a050edfd57fa553190f1512e32d247704":
-                    print(f"ツァビ発見！！！:{itr}")
+                if identifier in [
+                    "0x15d10a8a050edfd57fa553190f1512e32d247704",
+                    "0x393d0b87ed38fc779fd9611144ae649ba6082109",
+                ]:
+                    if identifier == "0x15d10a8a050edfd57fa553190f1512e32d247704":
+                        name = "ツァビ"
+                    elif identifier == "0x393d0b87ed38fc779fd9611144ae649ba6082109":
+                        name = "ステーキングアカウント"
+                    print(f"{name}発見！！！:{itr}")
                     pprint(metrics)
+                    # Calculate cumulative returns starting from $10,000
+                    initial_capital = 10000
+                    cum_returns = (1 + ret).cumprod() * initial_capital
+                    pprint(metrics)
+
+                    # Calculate cumulative returns starting from $10,000
+                    initial_capital = 10000
+                    cum_returns = (1 + ret).cumprod() * initial_capital
+
+                    # Get PnL history data
+                    pnl_values = np.array(
+                        [float(value[1]) for value in data_source_pnlHistory]
+                    )
+                    pnl_timestamps = pd.to_datetime(
+                        [value[0] for value in data_source_pnlHistory],
+                        unit="ms",
+                        origin="unix",
+                        utc=True,
+                    )
+
+                    # Create the plot
+                    fig, ax = plt.subplots(figsize=(12, 6))
+
+                    # Plot cumulative returns
+                    ax.plot(
+                        cum_returns.index,
+                        cum_returns.values,
+                        linewidth=2,
+                        label="Rebuilded Cumulative Returns",
+                        color="blue",
+                    )
+
+                    # Plot PnL history on the same axes
+                    ax.plot(
+                        pnl_timestamps,
+                        pnl_values,
+                        linewidth=2,
+                        label="PnL History",
+                        color="orange",
+                        alpha=0.7,
+                    )
+
+                    ax.set_xlabel("Date", fontsize=12)
+                    ax.set_ylabel("Value ($)", fontsize=12)
+                    ax.set_title(
+                        f"Returns from ${initial_capital:,}",
+                        fontsize=14,
+                    )
+                    ax.grid(True, alpha=0.3)
+                    ax.set_xlim(cum_returns.index[0], cum_returns.index[-1])
+
+                    # Add legend
+                    ax.legend(loc="upper left", fontsize=10)
+
+                    # Format y-axis to show dollar values
+                    ax.yaxis.set_major_formatter(
+                        FuncFormatter(lambda x, p: f"${x:,.0f}")
+                    )
+
+                    # Rotate x-axis labels for better readability
+                    plt.xticks(rotation=45)
+                    plt.tight_layout()
+
+                    # Display the plot in Streamlit
+                    st.pyplot(fig)
+                    plt.close(fig)
+
                 elif identifier == "0x90ee80619c9758baf30466bf69015c4c5447b85f":
                     print(f"ツァビ現物発見！！！:{itr}")
                     pprint(metrics)
 
                 break
+        else:
+            print(f"[Skipped] No matching period found for {identifier}")
+
+        if not found_period:
+            skipped_count += 1
+            skipped_reasons["no_data_range"] += 1
 
     progress_bar.empty()
     status_text.empty()
+
+    print(f"\n=== Data Processing Summary ===")
+    print(f"Total users processed: {total_steps}")
+    print(f"Successfully processed: {len(indicators)}")
+    print(f"Skipped: {skipped_count}")
+    print(f"\nSkip reasons:")
+    for reason, count in skipped_reasons.items():
+        if count > 0:
+            print(f"  - {reason}: {count}")
+    print(f"================================\n")
+
     return indicators, rets
 
 
@@ -623,6 +764,8 @@ else:
         if not indicators:
             st.error("❌ No valid user data could be processed.")
             st.stop()
+
+        print(f"Number of Resultant {identifier_name}: {len(indicators)}")
 
         # Create DataFrame
         final_df = pd.DataFrame(indicators).T
@@ -1115,7 +1258,7 @@ df_rets_weight = df_rets.loc[:, idx_weights]
 
 # dropna(axis=0, how="any") したあとのデータを使って計算したsharpe ratio
 print("\n")
-print("Sharpe Ratio of the top N items:")
+print(f"Sharpe Ratio of the top {N_ITEMS} items:")
 print(df_rets_weight.mean() / df_rets_weight.std())  # これでシャープレシオが計算できる
 print("\n")
 

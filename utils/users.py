@@ -39,7 +39,7 @@ class UserDataManager:
 
         # Configuration
         self.MAX_ADDRESSES_TO_FETCH = 30000
-        self.API_SLEEP_SECONDS = 0.3
+        self.API_SLEEP_SECONDS = 0.2
 
     def _load_proxies_and_create_instances(self, base_url):
         """Load proxies from proxies.json and create Info instances for each."""
@@ -185,28 +185,28 @@ class UserDataManager:
             self.save_user_data(address, {"portfolio": data}, "portfolio")
             return
         elif "portfolio" in data:
-            # if "portfolio" in data["portfolio"]:
-            #     print("nested portfolio found, saving directly")
-            #     # すでにポートフォリオがある場合は何もしない
-            #     save_user_data(address, data["portfolio"], "portfolio")
             return
-        # elif "portofolio" in data:
-        #     print("typo error: 'portofolio' should be 'portfolio'")
-        #     data["portfolio"] = data["portofolio"]
-        #     del data["portofolio"]
 
-        #     save_user_data(address, data, "portfolio")
-        #     return
-
-        # Fetch user portfolio using info.user_state
+        # Fetch user portfolio using portfolio endpoint
         try:
-            portfolio_data = self.info.user_state(address)
+            import requests
 
-            # Save to cache
-            data["portfolio"] = portfolio_data
-            self.save_user_data(address, data, "portfolio")
-            time.sleep(self.API_SLEEP_SECONDS)
-            return
+            INFO_URL = "https://api-ui.hyperliquid.xyz/info"
+            payload = {"type": "portfolio", "user": address}
+            response = requests.post(INFO_URL, json=payload)
+
+            if response.status_code == 200:
+                portfolio_data = response.json()
+                # Save to cache
+                data["portfolio"] = portfolio_data
+
+                self.save_user_data(address, data, "portfolio")
+                time.sleep(self.API_SLEEP_SECONDS)
+                return
+            else:
+                raise Exception(
+                    f"Failed to fetch portfolio: {response.status_code} {response.text}"
+                )
         except Exception as e:
             raise Exception(f"Failed to fetch portfolio: {e}")
 
