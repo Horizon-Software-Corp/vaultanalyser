@@ -38,8 +38,9 @@ class UserDataManager:
         self.USER_DATA_DIR = self.USER_CACHE_DIR + "user_data/"
 
         # Configuration
-        self.MAX_ADDRESSES_TO_FETCH = 30000
-        self.API_SLEEP_SECONDS = 0.2
+        self.MAX_ADDRESSES_TO_FETCH = 50000
+        self.API_SLEEP_SECONDS = 0.001
+        self.MIN_FILL_NUM = 100
 
     def _load_proxies_and_create_instances(self, base_url):
         """Load proxies from proxies.json and create Info instances for each."""
@@ -363,18 +364,73 @@ class UserDataManager:
 
         return addresses
 
+    def load_addresses_from_csv(self):
+        """Load addresses from aggregated_addresses_hourly.csv with minimum fill number filter.
+
+        Parameters
+        ----------
+        min_fill_num : int
+            Minimum total fill number to include an address
+
+        Returns
+        -------
+        list
+            List of addresses that meet the minimum fill criteria
+        """
+        csv_file = "aggregated_addresses_hourly.csv"
+
+        if not os.path.exists(csv_file):
+            print(f"CSV file {csv_file} not found")
+            return []
+
+        try:
+            df = pd.read_csv(csv_file)
+
+            # Filter by total column >= min_fill_num
+            filtered_df = df[df["total"] >= self.MIN_FILL_NUM]
+
+            # Extract addresses as list
+            addresses = filtered_df["address"].tolist()
+
+            print(
+                f"Loaded {len(addresses)} addresses from CSV with min_fill_num={self.MIN_FILL_NUM}"
+            )
+            return addresses
+
+        except Exception as e:
+            print(f"Error loading CSV file: {e}")
+            return []
+
     def fetch_user_addresses(
-        self, max_addresses=None, addresses_force_fetch=[], show_progress=True
+        self,
+        max_addresses=None,
+        addresses_force_fetch=[],
+        show_progress=True,
     ):
-        """Fetch user addresses from leaderboard."""
         if max_addresses is None:
             max_addresses = self.MAX_ADDRESSES_TO_FETCH
 
         self.ensure_user_cache_dirs()
 
-        # Get leaderboard
+        # Get leaderboard addresses
         leaderboard_data = self.fetch_leaderboard()
-        all_addresses = self.extract_addresses_from_leaderboard(leaderboard_data)
+        leaderboard_addresses = self.extract_addresses_from_leaderboard(
+            leaderboard_data
+        )
+
+        # Get CSV addresses with minimum fill filter
+        csv_addresses = self.load_addresses_from_csv()
+
+        # Take union of leaderboard and CSV addresses (preserving order, leaderboard first)
+        # all_addresses = leaderboard_addresses.copy()
+        all_addresses = []
+        for addr in csv_addresses:
+            if addr not in all_addresses:
+                all_addresses.append(addr)
+
+        print(
+            f"Total addresses: {len(all_addresses)} (Leaderboard: {len(leaderboard_addresses)}, CSV: {len(csv_addresses)})"
+        )
 
         # Get already fetched addresses
         fetched_addresses = self.get_fetched_addresses()
@@ -525,7 +581,25 @@ class UserDataManager:
     def get_user_stats(self):
         """Get statistics about fetched users."""
         self.ensure_user_cache_dirs()
-        self.fetch_leaderboard()
+        leaderboard_data = self.fetch_leaderboard()
+        leaderboard_addresses = self.extract_addresses_from_leaderboard(
+            leaderboard_data
+        )
+
+        # Get CSV addresses with minimum fill filter
+        csv_addresses = self.load_addresses_from_csv()
+
+        # Take union of leaderboard and CSV addresses (preserving order, leaderboard first)
+        # all_addresses = leaderboard_addresses.copy()
+        all_addresses = []
+        for addr in csv_addresses:
+            if addr not in all_addresses:
+                all_addresses.append(addr)
+
+        total_count = len(all_addresses)
+        print(
+            f"Total addresses: {len(all_addresses)} (Leaderboard: {len(leaderboard_addresses)}, CSV: {len(csv_addresses)})"
+        )
 
         # Count fetched addresses
         fetched_count = len(self.get_fetched_addresses())
@@ -544,13 +618,6 @@ class UserDataManager:
             )
 
         # Get total leaderboard size
-        total_count = 0
-        if os.path.exists(self.LEADERBOARD_CACHE_FILE):
-            with open(self.LEADERBOARD_CACHE_FILE, "r") as f:
-                leaderboard_data = json.load(f)
-                total_count = len(
-                    self.extract_addresses_from_leaderboard(leaderboard_data)
-                )
 
         return {
             "total_addresses": total_count,

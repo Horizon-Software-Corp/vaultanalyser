@@ -16,6 +16,22 @@ import shutil
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
+import matplotlib as mpl
+
+# Configure matplotlib to use a font that supports Japanese
+mpl.rcParams["font.family"] = [
+    "Hiragino Sans",
+    "Arial Unicode MS",
+    "YuGothic",
+    "Osaka",
+    "DejaVu Sans",
+]
+mpl.rcParams["font.sans-serif"] = [
+    "Hiragino Sans",
+    "Arial Unicode MS",
+    "YuGothic",
+    "Osaka",
+]
 
 
 from utils.vaults import (
@@ -56,9 +72,10 @@ class FilteringType(StrEnum):
 # Parameters
 # ────────────────────────────────────────────────────────────────
 data_type = DataType.USER  # Choose from [DataType.VAULT, DataType.USER]
-data_range = DataRange.ALL_TIME  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
+data_range = DataRange.MONTH  # Choose from [DataRange.ALL_TIME, DataRange.MONTH]
 is_debug = False  # Set to True for debugging mode
-MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
+# MAX_ITEMS = 100  # items are filtered based on Sharpe Ratio if more than MAX_ITEMS items are found
+# This is now configurable via UI
 is_cache_used = False
 is_renew_data = True
 filtering_symbols = lambda symbols_traded: True
@@ -66,11 +83,11 @@ filtering_symbols = lambda symbols_traded: True
 #     True if "PUMP" in symbols_traded and "HYPE" in symbols_traded else False
 # )
 
-default_filter = FilteringType.NONE
+default_filter = FilteringType.ALGO
 # ────────────────────────────────────────────────────────────────
 # Parameters for weight calculation
 # ────────────────────────────────────────────────────────────────
-N_ITEMS = 20
+# N_ITEMS = 10  # This is now configurable via UI
 sort_col_weight = "Sharpe Ratio"  # Column to sort by
 # sort_col_weight = "Total Address PnL"  # Column to sort by
 rf_rate = 0.09  # Annualized risk-free rate
@@ -156,7 +173,7 @@ if is_renew_data:
 
     if not os.path.exists(DST_PATH) or pd.Timestamp.now() - pd.Timestamp(
         cache_date
-    ) > pd.Timedelta(days=7):
+    ) > pd.Timedelta(days=3):
 
         copy_entire_dir_with_date(SRC_DIR, DST_DIR)
     else:
@@ -190,7 +207,7 @@ if data_range == DataRange.ALL_TIME:
     sharpe_prefix = "Weekly"
     separation_params = {"h": 8, "SR0": 0.1, "LT": 16}
     # Accept both 'allTime' and 'a' for ALL_TIME
-    accepted_period_names = ["allTime", "a"]
+
 
 elif data_range == DataRange.MONTH:
     data_index = 2
@@ -199,7 +216,7 @@ elif data_range == DataRange.MONTH:
     sharpe_prefix = "Daily"
     separation_params = {"h": 8, "SR0": 0.1, "LT": None}
     # Accept both 'month' and 'm' for MONTH
-    accepted_period_names = ["month", "m"]
+
 else:
     raise ValueError(f"Invalid data_range: {data_range}. Choose 'allTime' or 'month'.")
 
@@ -264,7 +281,7 @@ def new_process_user_data_for_analysis(user_data_list):
             period_name = period_data[0] if period_data else None
 
             # Check if this period matches what we're looking for
-            if period_name in accepted_period_names:
+            if period_name == data_range:
                 found_period = True
                 if data_type == DataType.VAULT:
                     leader_eq = next(
@@ -389,7 +406,7 @@ def new_process_user_data_for_analysis(user_data_list):
                 index_ts = pd.to_datetime(
                     timestamps, unit="ms", origin="unix", utc=True
                 )
-                ret = pd.Series(
+                ret_raw = pd.Series(
                     returns,
                     index=index_ts,
                     dtype=float,
@@ -397,7 +414,7 @@ def new_process_user_data_for_analysis(user_data_list):
                 is_resample = True
                 if is_resample:
                     # daily resampling by close
-                    ret = (1 + ret).resample(
+                    ret = (1 + ret_raw).resample(
                         resample_rule, label="left", closed="left"
                     ).prod() - 1
                     ret.fillna(0, inplace=True)  # スカスカなので
@@ -522,11 +539,17 @@ def new_process_user_data_for_analysis(user_data_list):
 
                     metrics["Estimated Fill Counts (30D)"] = fills_count_estimated
 
-                    metrics["Perp Taker Fee (bips)"] = (
+                    metrics["Perp Maker Fee (bips)"] = (
                         float(user_data["fees"]["userAddRate"]) * 10000
                     )
-                    metrics["Spot Taker Fee (bips)"] = (
+                    metrics["Perp Taker Fee (bips)"] = (
+                        float(user_data["fees"]["userCrossRate"]) * 10000
+                    )
+                    metrics["Spot Maker Fee (bips)"] = (
                         float(user_data["fees"]["userSpotAddRate"]) * 10000
+                    )
+                    metrics["Spot Taker Fee (bips)"] = (
+                        float(user_data["fees"]["userSpotCrossRate"]) * 10000
                     )
                     metrics["Maker Volume (14D)"] = float(
                         user_data["fees"]["dailyUserVlm_14D"]["userAdd"]
@@ -553,71 +576,93 @@ def new_process_user_data_for_analysis(user_data_list):
                 rets[itr] = ret
 
                 if identifier in [
-                    "0x15d10a8a050edfd57fa553190f1512e32d247704",
-                    "0x393d0b87ed38fc779fd9611144ae649ba6082109",
+                    # "0x15d10a8a050edfd57fa553190f1512e32d247704",
+                    # "0x90ee80619c9758baf30466bf69015c4c5447b85f",
+                    # "0x393d0b87ed38fc779fd9611144ae649ba6082109",
                 ]:
+
                     if identifier == "0x15d10a8a050edfd57fa553190f1512e32d247704":
                         name = "ツァビ"
+                    elif identifier == "0x90ee80619c9758baf30466bf69015c4c5447b85f":
+                        name = "ツァビ現物"
                     elif identifier == "0x393d0b87ed38fc779fd9611144ae649ba6082109":
                         name = "ステーキングアカウント"
-                    print(f"{name}発見！！！:{itr}")
+                    print(f"\n{name}発見！！！:{itr}")
                     pprint(metrics)
                     # Calculate cumulative returns starting from $10,000
                     initial_capital = 10000
-                    cum_returns = (1 + ret).cumprod() * initial_capital
-                    pprint(metrics)
-
-                    # Calculate cumulative returns starting from $10,000
-                    initial_capital = 10000
-                    cum_returns = (1 + ret).cumprod() * initial_capital
+                    cum_returns = ((1 + ret_raw).cumprod() - 1) * initial_capital
+                    # print(ret)
+                    # print(cum_returns)
 
                     # Get PnL history data
-                    pnl_values = np.array(
-                        [float(value[1]) for value in data_source_pnlHistory]
+                    pnl_values = pd.Series(
+                        [float(value[1]) for value in data_source_pnlHistory],
                     )
+
                     pnl_timestamps = pd.to_datetime(
                         [value[0] for value in data_source_pnlHistory],
                         unit="ms",
                         origin="unix",
                         utc=True,
                     )
+                    pnl_values.index = pnl_timestamps
 
-                    # Create the plot
-                    fig, ax = plt.subplots(figsize=(12, 6))
+                    print(pnl_values)
 
-                    # Plot cumulative returns
-                    ax.plot(
+                    # Create the plot with dual y-axes
+                    fig, ax1 = plt.subplots(figsize=(12, 6))
+
+                    # Plot cumulative returns on left y-axis
+                    ax1.plot(
                         cum_returns.index,
                         cum_returns.values,
                         linewidth=2,
-                        label="Rebuilded Cumulative Returns",
+                        label=f"Rebuilded Cumulative Returns from ${initial_capital:,}",
                         color="blue",
                     )
+                    ax1.set_xlabel("Date", fontsize=12)
+                    ax1.set_ylabel(
+                        f"Cumulative Returns from ${initial_capital:,} ($)",
+                        fontsize=12,
+                        color="blue",
+                    )
+                    ax1.tick_params(axis="y", labelcolor="blue")
 
-                    # Plot PnL history on the same axes
-                    ax.plot(
-                        pnl_timestamps,
-                        pnl_values,
+                    # Create second y-axis for PnL history
+                    ax2 = ax1.twinx()
+                    ax2.plot(
+                        pnl_values.index,
+                        pnl_values.values,
                         linewidth=2,
                         label="PnL History",
                         color="orange",
                         alpha=0.7,
                     )
-
-                    ax.set_xlabel("Date", fontsize=12)
-                    ax.set_ylabel("Value ($)", fontsize=12)
-                    ax.set_title(
-                        f"Returns from ${initial_capital:,}",
+                    ax2.set_ylabel("PnL ($)", fontsize=12, color="orange")
+                    ax2.tick_params(axis="y", labelcolor="orange")
+                    ax1.set_title(
+                        f"{name} Returns",
                         fontsize=14,
                     )
-                    ax.grid(True, alpha=0.3)
-                    ax.set_xlim(cum_returns.index[0], cum_returns.index[-1])
+                    ax1.grid(True, alpha=0.3)
+                    ax1.set_xlim(cum_returns.index[0], cum_returns.index[-1])
 
-                    # Add legend
-                    ax.legend(loc="upper left", fontsize=10)
+                    # Combine legends from both axes
+                    lines1, labels1 = ax1.get_legend_handles_labels()
+                    lines2, labels2 = ax2.get_legend_handles_labels()
+                    ax1.legend(
+                        lines1 + lines2,
+                        labels1 + labels2,
+                        loc="upper left",
+                        fontsize=10,
+                    )
 
-                    # Format y-axis to show dollar values
-                    ax.yaxis.set_major_formatter(
+                    # Format y-axes to show dollar values
+                    ax1.yaxis.set_major_formatter(
+                        FuncFormatter(lambda x, p: f"${x:,.0f}")
+                    )
+                    ax2.yaxis.set_major_formatter(
                         FuncFormatter(lambda x, p: f"${x:,.0f}")
                     )
 
@@ -629,17 +674,14 @@ def new_process_user_data_for_analysis(user_data_list):
                     st.pyplot(fig)
                     plt.close(fig)
 
-                elif identifier == "0x90ee80619c9758baf30466bf69015c4c5447b85f":
-                    print(f"ツァビ現物発見！！！:{itr}")
-                    pprint(metrics)
-
                 break
-        else:
-            print(f"[Skipped] No matching period found for {identifier}")
 
         if not found_period:
             skipped_count += 1
             skipped_reasons["no_data_range"] += 1
+            print(
+                f"[Skipped] No matching period found for {identifier}:{[pd[0] for pd in portfolio_data if pd]}"
+            )
 
     progress_bar.empty()
     status_text.empty()
@@ -712,7 +754,7 @@ else:
         # Display statistics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Leaderboard", user_stats["total_addresses"])
+            st.metric("Total Addresses", user_stats["total_addresses"])
         with col2:
             st.metric("Fetched Users", user_stats["fetched_addresses"])
         with col3:
@@ -734,14 +776,14 @@ else:
                     "Initial users to download",
                     min_value=1,
                     max_value=MAX_ADDRESSES_TO_FETCH,
-                    value=30000,
+                    value=50000,
                     step=1,
-                    help="Number of users to download from leaderboard",
+                    help="Number of users to download from address list",
                     key="initial_users_input",
                 )
             with col2:
                 if st.button(
-                    f"🔄 Download {initial_users_to_fetch} Users from Leaderboard"
+                    f"🔄 Download {initial_users_to_fetch} Users from address list"
                 ):
                     with st.spinner("Downloading user data..."):
                         fetch_user_addresses(
@@ -804,10 +846,10 @@ else:
             users_to_fetch = st.number_input(
                 "Users to process",
                 min_value=1,
-                max_value=30000,
+                max_value=50000,
                 value=MAX_ADDRESSES_TO_FETCH,
                 step=1,
-                help="Number of users to process from leaderboard",
+                help="Number of users to process from address list",
             )
         with col2:
             if st.button(f"➕ Process {users_to_fetch} More Users"):
@@ -902,7 +944,7 @@ sliders = [
         "default_min": 0.1 if is_algo else 0.1,
         "default_max": 10,
         "step": 0.05,
-        "log_scale": False,
+        "log_scale": True,
     },
     {
         "label": f"{sharpe_prefix} Sortino Ratio",
@@ -910,7 +952,7 @@ sliders = [
         "default_min": 0.1 if is_algo else 0.1,
         "default_max": 10,
         "step": 0.05,
-        "log_scale": False,
+        "log_scale": True,
     },
     {
         "label": "Annualized Gain(simple) %/yr",
@@ -977,11 +1019,27 @@ sliders = [
         "log_scale": True,
     },
     {
+        "label": "Perp Maker Fee (bips)",
+        "column": "Perp Maker Fee (bips)",
+        "default_min": -100,
+        "default_max": 100,
+        "step": 0.001,
+        "log_scale": False,
+    },
+    {
         "label": "Perp Taker Fee (bips)",
         "column": "Perp Taker Fee (bips)",
         "default_min": -100,
         "default_max": 100,
-        "step": 0.0001,
+        "step": 0.001,
+        "log_scale": False,
+    },
+    {
+        "label": "Spot Maker Fee (bips)",
+        "column": "Spot Maker Fee (bips)",
+        "default_min": -100,
+        "default_max": 100,
+        "step": 0.001,
         "log_scale": False,
     },
     {
@@ -989,7 +1047,7 @@ sliders = [
         "column": "Spot Taker Fee (bips)",
         "default_min": -100,
         "default_max": 100,
-        "step": 0.0001,
+        "step": 0.001,
         "log_scale": False,
     },
     {
@@ -1038,6 +1096,13 @@ sliders = [
 if default_filter == FilteringType.NONE:
     for slider in sliders:
         slider["default_min"] = -10_000_000_000
+        slider["default_max"] = 10_000_000_000
+
+for slider in sliders:
+    if slider["default_min"] == -float("inf"):
+        slider["default_min"] = -10_000_000_000
+
+    if slider["default_max"] == float("inf"):
         slider["default_max"] = 10_000_000_000
 
 
@@ -1204,6 +1269,32 @@ def range_slider_with_label(
         )
 
 
+# Add MAX_ITEMS and N_ITEMS configuration
+st.markdown("### Display & Optimization Settings")
+col1, col2, col3 = st.columns(3)
+with col1:
+    MAX_ITEMS = st.number_input(
+        "Maximum items to display",
+        min_value=10,
+        max_value=1000,
+        value=100,
+        step=10,
+        help="Maximum number of items to show in the filtered results table (sorted by Sharpe Ratio)",
+        key="max_items_display",
+    )
+with col2:
+    N_ITEMS = st.number_input(
+        "Items for portfolio optimization",
+        min_value=2,
+        max_value=500,
+        value=10,
+        step=1,
+        help="Number of top items to include in portfolio weight optimization",
+        key="n_items_optimization",
+    )
+
+# Filter sliders
+st.markdown("### Filter Settings")
 for i in range(0, len(sliders), 3):
     cols = st.columns(3)
     for slider, col in zip(sliders[i : i + 3], cols):
